@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>小红书选品工作台</title>
+  <style>
+    :root{--red:#FF2442;--ink:#1A1A1A;--ink2:#595959;--ink3:#666;--soft:#F7F7F7;--line:#EDEDED;--green:#1FA663}
+    *{box-sizing:border-box}html,body{margin:0;height:100%;font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;color:var(--ink);font-size:14px}
+    body{display:flex;flex-direction:column;background:#fff}.topbar{height:58px;display:flex;align-items:center;border-bottom:1px solid var(--line);padding:0 18px;flex:none}
+    .brand{display:flex;align-items:center;gap:10px;min-width:292px}.mark{width:30px;height:30px;border-radius:8px;background:var(--red);color:#fff;display:grid;place-items:center;font-weight:600}.brand b{font-size:16px}.brand span{font-size:12px;color:var(--ink2);margin-left:6px}
+    nav{align-self:stretch;display:flex}.tab{height:58px;padding:0 18px;display:flex;align-items:center;color:var(--ink2);font-weight:500}.tab.active{color:var(--ink);position:relative}.tab.active:after{content:"";position:absolute;left:18px;right:18px;bottom:0;height:2px;background:var(--red)}
+    .service{margin-left:auto;border:1px solid #ddd;border-radius:999px;padding:6px 10px;color:var(--ink2);font-size:13px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px}
+    main{min-height:0;flex:1;display:flex;flex-direction:column}.head{padding:18px 22px 12px;border-bottom:1px solid var(--line)}h1{font-size:22px;font-weight:500;margin:0}.subtitle{font-size:13px;color:var(--ink2);margin-top:6px}.metric{display:inline-block;margin-top:14px;min-width:128px;height:58px;padding:9px 12px;background:#fafafa;border:1px solid var(--line);border-radius:8px}.metric span{display:block;color:var(--ink2);font-size:12px}.metric b{font-size:18px;font-weight:600}
+    .notice{margin:18px 22px 0;padding:12px 14px;background:var(--soft);border:1px solid var(--line);border-radius:8px;color:var(--ink2);line-height:1.6}.tablewrap{padding:0 22px;overflow:auto}.empty{padding:56px 0;text-align:center;color:var(--ink3)}
+    table{width:100%;border-collapse:collapse;table-layout:fixed}th{height:44px;text-align:left;color:var(--ink2);font-size:12px;font-weight:600;border-bottom:1px solid var(--line)}td{height:78px;border-bottom:1px solid var(--line);font-size:13px}.product{display:flex;align-items:center;gap:10px;min-width:0}.product img{width:52px;height:52px;object-fit:cover;border:1px solid var(--line);border-radius:8px;background:var(--soft)}.copy{min-width:0}.copy b,.copy span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.copy b{font-weight:500}.copy span{font-size:12px;color:var(--ink3);margin-top:5px}.num{font-variant-numeric:tabular-nums;font-weight:600}.status{display:inline-flex;border-radius:999px;padding:4px 8px;background:#eff9f4;color:var(--green);font-size:11px}
+  </style>
+</head>
+<body>
+  <header class="topbar"><div class="brand"><div class="mark">选</div><b>小红书选品工作台 <span>人工选品 · V1</span></b></div><nav><div class="tab active">单品监控</div><div class="tab">店铺监控</div><div class="tab">选品中心</div></nav><div class="service"><i class="dot"></i>采集服务正常</div></header>
+  <main><section class="head"><h1>单品监控</h1><div class="subtitle">当前阶段仅验证真实商品采集、独立入库与显示。</div><div class="metric"><span>已入库商品</span><b id="count">0</b></div></section>
+    <div class="notice" id="notice">请在左侧打开商品详情，点击“加入监控”。工作台会使用正常分享流程取得链接并执行首次真实采集。</div>
+    <div class="tablewrap" id="content"><div class="empty">尚无商品</div></div>
+  </main><script src="/app.js"></script>
+</body></html>
+

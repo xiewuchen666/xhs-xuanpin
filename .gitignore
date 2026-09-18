@@ -9,6 +9,7 @@ venv/
 bin/
 obj/
 .vs/
+.dotnet/
 *.user
 *.suo
 
