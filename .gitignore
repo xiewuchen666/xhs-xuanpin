@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# .NET / Visual Studio
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Local runtime data
+data/
+logs/
+*.db
+*.db-shm
+*.db-wal
+
+# Browser / Android runtime profiles
+browser_profile/
+chrome_profile/
+
+# Local secrets / env
+.env
+.env.*
+!.env.example
+
+# Build / package output
+dist/
+publish/
+artifacts/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Temporary files
+*.tmp
+*.log
