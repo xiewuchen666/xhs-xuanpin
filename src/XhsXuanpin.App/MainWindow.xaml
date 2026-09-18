@@ -59,6 +59,85 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="PhoneAppToggleButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="MinWidth" Value="78"/>
+            <Setter Property="Padding" Value="9,0"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#D9D9D9"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#595959"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Border"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F7F7F7"/>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="#CFCFCF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F0F0F0"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="GlobalCollectionToggleButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="MinWidth" Value="72"/>
+            <Setter Property="Padding" Value="11,0"/>
+            <Setter Property="Margin" Value="8,0,0,0"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#DDDDDD"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#595959"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Border"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="15">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F7F7F7"/>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="#CFCFCF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F0F0F0"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="GlobalTabButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="88"/>
             <Setter Property="Height" Value="58"/>
@@ -155,6 +234,11 @@
                     <TextBlock x:Name="GlobalCollectionStateText" Text=" · 启动中" FontSize="11" Foreground="#E89A19"/>
                 </StackPanel>
             </Border>
+            <Button x:Name="GlobalCollectionToggleButton"
+                    Style="{StaticResource GlobalCollectionToggleButtonStyle}"
+                    Content="暂停采集"
+                    Click="GlobalCollectionToggleButton_Click"
+                    ToolTip="暂停全局自动采集；不影响手动立即采集"/>
             <TextBlock x:Name="CurrentTimeText" Text="--:--" FontSize="12" Foreground="#595959"
                        Margin="12,0,8,0" VerticalAlignment="Center"/>
             <Button x:Name="MinimizeButton" Style="{StaticResource WindowButtonStyle}"
@@ -173,14 +257,37 @@
             </Grid.RowDefinitions>
 
             <Grid Grid.Row="0" Margin="12,0">
-                <TextBlock Text="小红书" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                <TextBlock x:Name="AndroidStatus" Text="Android · 正在连接" Foreground="#595959" FontSize="13"
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" x:Name="XhsAppToggleButton"
+                        Style="{StaticResource PhoneAppToggleButtonStyle}"
+                        Content="检测中…"
+                        Margin="0"
+                        IsEnabled="False"
+                        Click="XhsAppToggleButton_Click"
+                        ToolTip="关闭小红书 App；MuMu、手机画面连接和后台采集保持运行"/>
+                <TextBlock Grid.Column="2" x:Name="AndroidStatus" Text="Android · 正在连接" Foreground="#595959" FontSize="13"
                            VerticalAlignment="Center" HorizontalAlignment="Right"/>
             </Grid>
 
             <Grid Grid.Row="1" x:Name="PhoneViewport" Margin="8,0,8,8" Background="White" ClipToBounds="True">
                 <wfi:WindowsFormsHost x:Name="PhoneHost" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      Visibility="Hidden"
                                       SnapsToDevicePixels="True"/>
+                <Border x:Name="XhsLaunchPlaceholder"
+                        Background="White"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Stretch"
+                        Panel.ZIndex="5">
+                    <Image Source="Assets/xhs-launch-placeholder.jpg"
+                           Stretch="Uniform"
+                           HorizontalAlignment="Stretch"
+                           VerticalAlignment="Stretch"
+                           SnapsToDevicePixels="True"/>
+                </Border>
             </Grid>
 
             <Border Grid.Row="2" Background="White" BorderBrush="#EDEDED" BorderThickness="0,1,0,0">

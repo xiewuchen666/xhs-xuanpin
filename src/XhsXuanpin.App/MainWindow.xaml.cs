@@ -25,10 +25,16 @@ public partial class MainWindow : Window
     private GridLength _expandedPhoneWidth = new(34, GridUnitType.Star);
     private bool _runtimeReady;
     private bool _monitorBusy;
+    private bool _globalCollectionToggleBusy;
+    private bool _autoCollectionEnabled = true;
+    private bool _xhsToggleBusy;
+    private bool _xhsRunning;
+    private bool _xhsLiveSurfaceReady;
     private bool _pageStateRefreshInProgress;
     private DateTime _pageMessageHoldUntilUtc;
     private DateTime _lastProductSummaryRefreshUtc = DateTime.MinValue;
     private DateTime _lastCollectorStatusRefreshUtc = DateTime.MinValue;
+    private DateTime _lastXhsAppStateRefreshUtc = DateTime.MinValue;
     private AndroidProductSummary? _currentProductSummary;
     private bool _windowSizing;
     private string _workspaceView = "single";
@@ -86,6 +92,7 @@ public partial class MainWindow : Window
             await _runtime.StartAsync(_phonePanel.Handle);
             _runtime.ResizePhone(_phonePanel.ClientSize);
             SetRuntimeHealthy();
+            await RefreshXhsAppStateAsync(force: true);
             InstallPhoneMouseHook();
             await Workspace.EnsureCoreWebView2Async();
             Workspace.CoreWebView2.NewWindowRequested += Workspace_NewWindowRequested;
@@ -122,6 +129,8 @@ public partial class MainWindow : Window
             if (status is null) return;
 
             GlobalCollectionIntervalText.Text = $"全局采集 {status.auto_interval_minutes} 分钟";
+            _autoCollectionEnabled = status.auto_enabled;
+            UpdateGlobalCollectionToggleButton();
             if (status.latest_job?.status == "blocked")
             {
                 GlobalCollectionStateText.Text = " · 需人工验证";
@@ -158,6 +167,190 @@ public partial class MainWindow : Window
         {
             GlobalCollectionStateText.Text = " · 状态未知";
             GlobalCollectionStateText.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE8, 0x9A, 0x19));
+        }
+    }
+
+    private void UpdateGlobalCollectionToggleButton()
+    {
+        if (_globalCollectionToggleBusy)
+        {
+            GlobalCollectionToggleButton.IsEnabled = false;
+            GlobalCollectionToggleButton.Content = "处理中…";
+            return;
+        }
+
+        GlobalCollectionToggleButton.IsEnabled = true;
+        GlobalCollectionToggleButton.Content = _autoCollectionEnabled ? "暂停采集" : "开始采集";
+        GlobalCollectionToggleButton.ToolTip = _autoCollectionEnabled
+            ? "暂停全局自动采集；不影响手动立即采集"
+            : "恢复全局自动采集";
+    }
+
+    private async void GlobalCollectionToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_globalCollectionToggleBusy)
+            return;
+
+        var targetEnabled = !_autoCollectionEnabled;
+        _globalCollectionToggleBusy = true;
+        UpdateGlobalCollectionToggleButton();
+
+        try
+        {
+            using var response = await Http.PostAsJsonAsync(
+                "/api/settings",
+                new { auto_enabled = targetEnabled });
+            response.EnsureSuccessStatusCode();
+
+            _autoCollectionEnabled = targetEnabled;
+            if (Workspace.CoreWebView2 is not null)
+            {
+                var checkedValue = targetEnabled ? "true" : "false";
+                await Workspace.CoreWebView2.ExecuteScriptAsync(
+                    $"(() => {{ const el = document.querySelector('#autoEnabledInput'); if (el) el.checked = {checkedValue}; }})()");
+            }
+
+            await RefreshCollectorStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            GlobalCollectionStateText.Text = " · 切换失败";
+            GlobalCollectionStateText.Foreground = System.Windows.Media.Brushes.IndianRed;
+            GlobalCollectionStateText.ToolTip = ex.Message;
+        }
+        finally
+        {
+            _globalCollectionToggleBusy = false;
+            UpdateGlobalCollectionToggleButton();
+        }
+    }
+
+    private async Task RefreshXhsAppStateAsync(bool force = false)
+    {
+        if (!force &&
+            DateTime.UtcNow - _lastXhsAppStateRefreshUtc < TimeSpan.FromSeconds(2))
+            return;
+
+        _xhsRunning = await _runtime.IsXhsRunningAsync();
+        if (!_xhsRunning)
+        {
+            _xhsLiveSurfaceReady = false;
+        }
+        else if (force)
+        {
+            _xhsLiveSurfaceReady = await _runtime.WaitForXhsLiveSurfaceStableAsync(
+                requiredStableChecks: 2,
+                checkIntervalMilliseconds: 250,
+                maxChecks: 12);
+        }
+        else if (!_xhsLiveSurfaceReady)
+        {
+            _xhsLiveSurfaceReady = await _runtime.WaitForXhsLiveSurfaceStableAsync(requiredStableChecks: 2, checkIntervalMilliseconds: 200, maxChecks: 3);
+        }
+
+        _lastXhsAppStateRefreshUtc = DateTime.UtcNow;
+        UpdateXhsAppToggleButton();
+        UpdatePhoneSurfaceMode();
+    }
+
+    private void UpdateXhsAppToggleButton()
+    {
+        if (_xhsToggleBusy)
+        {
+            XhsAppToggleButton.IsEnabled = false;
+            XhsAppToggleButton.Content = "处理中…";
+            return;
+        }
+
+        XhsAppToggleButton.IsEnabled = true;
+        XhsAppToggleButton.Content = _xhsRunning ? "关闭小红书" : "启动小红书";
+        XhsAppToggleButton.ToolTip = _xhsRunning
+            ? "关闭小红书 App；MuMu、手机画面连接和后台采集保持运行"
+            : "启动并唤醒小红书 App";
+    }
+
+    private void UpdatePhoneSurfaceMode()
+    {
+        var showLivePhone = _phoneVisible && _xhsRunning && _xhsLiveSurfaceReady;
+        PhoneHost.Visibility = showLivePhone ? Visibility.Visible : Visibility.Hidden;
+        XhsLaunchPlaceholder.Visibility = _phoneVisible && !showLivePhone
+            ? Visibility.Visible
+            : Visibility.Hidden;
+        _runtime.SetPhoneVisible(showLivePhone);
+    }
+
+    private async void XhsAppToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_xhsToggleBusy)
+            return;
+
+        _xhsToggleBusy = true;
+        UpdateXhsAppToggleButton();
+
+        try
+        {
+            _currentProductSummary = null;
+            _lastProductSummaryRefreshUtc = DateTime.MinValue;
+            SetProductActionsVisible(false);
+
+            if (_xhsRunning)
+            {
+                _xhsLiveSurfaceReady = false;
+                UpdatePhoneSurfaceMode();
+                BridgeTitle.Text = "正在关闭小红书";
+                BridgeStatus.Text = "后台监控采集继续运行";
+                await _runtime.StopXhsAsync();
+                _xhsRunning = false;
+                _xhsLiveSurfaceReady = false;
+                BridgeTitle.Text = "小红书已关闭";
+                BridgeStatus.Text = "需要选品时点击左上角“启动小红书”";
+            }
+            else
+            {
+                _xhsLiveSurfaceReady = false;
+                UpdatePhoneSurfaceMode();
+                BridgeTitle.Text = "正在启动小红书";
+                BridgeStatus.Text = "启动完成前继续显示占位画面";
+                await _runtime.StartXhsAsync();
+                _xhsRunning = await _runtime.IsXhsRunningAsync();
+                _xhsLiveSurfaceReady = _xhsRunning &&
+                    await _runtime.WaitForXhsLiveSurfaceStableAsync(
+                        requiredStableChecks: 3,
+                        checkIntervalMilliseconds: 300,
+                        maxChecks: 30);
+
+                if (_xhsLiveSurfaceReady)
+                {
+                    BridgeTitle.Text = "小红书已启动";
+                    BridgeStatus.Text = "打开商品详情后可继续加入监控或选品中心";
+                }
+                else
+                {
+                    BridgeTitle.Text = "小红书正在启动";
+                    BridgeStatus.Text = "等待 scrcpy 正确读取窗口并稳定后自动切换到实时画面";
+                }
+            }
+
+            _lastXhsAppStateRefreshUtc = DateTime.UtcNow;
+            UpdatePhoneSurfaceMode();
+        }
+        catch (Exception ex)
+        {
+            BridgeTitle.Text = "小红书开关操作失败";
+            BridgeStatus.Text = ex.Message;
+            _lastXhsAppStateRefreshUtc = DateTime.MinValue;
+            try
+            {
+                await RefreshXhsAppStateAsync(force: true);
+            }
+            catch
+            {
+            }
+        }
+        finally
+        {
+            _xhsToggleBusy = false;
+            UpdateXhsAppToggleButton();
         }
     }
 
@@ -395,6 +588,16 @@ public partial class MainWindow : Window
         var height = width * 16d / 9d;
         PhoneHost.Width = Math.Floor(width);
         PhoneHost.Height = Math.Floor(height);
+
+        // WindowsFormsHost may finish resizing one layout pass after WPF has
+        // assigned its final size. Force scrcpy to follow the settled host
+        // size on the render queue so it cannot remain at the small startup
+        // size in the top-left corner.
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_phoneVisible)
+                _runtime.ResizePhone(_phonePanel.ClientSize);
+        }, DispatcherPriority.Render);
     }
 
     private void PhoneToggle_Click(object sender, RoutedEventArgs e)
@@ -405,7 +608,6 @@ public partial class MainWindow : Window
             _phoneVisible = false;
             PhoneColumn.MinWidth = 0;
             PhoneColumn.Width = new GridLength(0);
-            PhoneHost.Visibility = Visibility.Hidden;
             PhoneSplitter.IsEnabled = false;
             GlobalTabsHost.Margin = new Thickness(300, 0, 0, 0);
         }
@@ -415,7 +617,6 @@ public partial class MainWindow : Window
             PhoneColumn.MinWidth = 400;
             PhoneColumn.MaxWidth = 680;
             PhoneColumn.Width = _expandedPhoneWidth;
-            PhoneHost.Visibility = Visibility.Visible;
             PhoneSplitter.IsEnabled = true;
             GlobalTabsHost.Margin = new Thickness(0);
         }
@@ -425,7 +626,7 @@ public partial class MainWindow : Window
         Dispatcher.InvokeAsync(() =>
         {
             if (_phoneVisible) FitPhoneSurface();
-            _runtime.SetPhoneVisible(_phoneVisible);
+            UpdatePhoneSurfaceMode();
         }, DispatcherPriority.Loaded);
     }
 
@@ -560,7 +761,7 @@ public partial class MainWindow : Window
         _pageStateRefreshInProgress = true;
         try
         {
-            var recovered = await _runtime.EnsureHealthyAsync(_phoneVisible);
+            var recovered = await _runtime.EnsureHealthyAsync(_phoneVisible && _xhsLiveSurfaceReady);
             if (recovered)
             {
                 FitPhoneSurface();
@@ -571,6 +772,33 @@ public partial class MainWindow : Window
             {
                 await RefreshCollectorStatusAsync();
                 _lastCollectorStatusRefreshUtc = DateTime.UtcNow;
+            }
+
+            await RefreshXhsAppStateAsync();
+            if (!_xhsRunning)
+            {
+                SetProductActionsVisible(false);
+                _currentProductSummary = null;
+                _lastProductSummaryRefreshUtc = DateTime.MinValue;
+                if (DateTime.UtcNow >= _pageMessageHoldUntilUtc)
+                {
+                    BridgeTitle.Text = "小红书已关闭";
+                    BridgeStatus.Text = "需要选品时点击左上角“启动小红书”";
+                }
+                return;
+            }
+
+            if (!_xhsLiveSurfaceReady)
+            {
+                SetProductActionsVisible(false);
+                _currentProductSummary = null;
+                _lastProductSummaryRefreshUtc = DateTime.MinValue;
+                if (DateTime.UtcNow >= _pageMessageHoldUntilUtc)
+                {
+                    BridgeTitle.Text = "小红书正在启动";
+                    BridgeStatus.Text = "等待 scrcpy 窗口信息稳定后自动切换到实时画面";
+                }
+                return;
             }
 
             var isProductDetail = await _runtime.IsProductDetailAsync();

@@ -98,7 +98,6 @@ internal sealed class RuntimeCoordinator : IDisposable
             if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
 
             await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
-            await RunAsync(_adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
             await EnsureScrcpyAsync();
             SetPhoneVisible(phoneVisible);
             return true;
@@ -196,7 +195,154 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (!await AdbReadyAsync()) throw new InvalidOperationException("MuMu Android 未在 120 秒内连接");
         await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
         await EnsureReadableDensityAsync();
+    }
+
+    public async Task<bool> IsXhsRunningAsync()
+    {
+        if (!await AdbReadyAsync()) return false;
+        try
+        {
+            var output = await RunAsync(_adb, "-s", Serial, "shell", "pidof", "com.xingin.xhs");
+            return !string.IsNullOrWhiteSpace(output);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> IsXhsForegroundAsync()
+    {
+        if (!await AdbReadyAsync()) return false;
+        try
+        {
+            var output = await RunAsync(_adb, "-s", Serial, "shell", "dumpsys", "activity", "activities");
+            return output
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Any(line =>
+                    line.Contains("topResumedActivity=", StringComparison.Ordinal) &&
+                    line.Contains("com.xingin.xhs/", StringComparison.Ordinal));
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> WaitForXhsLiveSurfaceStableAsync(
+        int requiredStableChecks = 3,
+        int checkIntervalMilliseconds = 300,
+        int maxChecks = 30)
+    {
+        var stableChecks = 0;
+        var lastWidth = -1;
+        var lastHeight = -1;
+        var lastHostWidth = -1;
+        var lastHostHeight = -1;
+
+        for (var i = 0; i < maxChecks; i++)
+        {
+            var foregroundReady = await IsXhsForegroundAsync();
+            var surfaceReady = TryGetScrcpySurfaceSnapshot(
+                out var width,
+                out var height,
+                out var hostWidth,
+                out var hostHeight);
+
+            if (foregroundReady && surfaceReady)
+            {
+                var sameAsPrevious =
+                    width == lastWidth &&
+                    height == lastHeight &&
+                    hostWidth == lastHostWidth &&
+                    hostHeight == lastHostHeight;
+
+                stableChecks = sameAsPrevious ? stableChecks + 1 : 1;
+                lastWidth = width;
+                lastHeight = height;
+                lastHostWidth = hostWidth;
+                lastHostHeight = hostHeight;
+
+                if (stableChecks >= requiredStableChecks)
+                    return true;
+            }
+            else
+            {
+                stableChecks = 0;
+                lastWidth = lastHeight = lastHostWidth = lastHostHeight = -1;
+            }
+
+            await Task.Delay(checkIntervalMilliseconds);
+        }
+
+        return false;
+    }
+
+    private bool TryGetScrcpySurfaceSnapshot(
+        out int width,
+        out int height,
+        out int hostWidth,
+        out int hostHeight)
+    {
+        width = height = hostWidth = hostHeight = 0;
+
+        try
+        {
+            if (_scrcpy is null || _scrcpy.HasExited ||
+                _scrcpyWindow == IntPtr.Zero || !NativeMethods.IsWindow(_scrcpyWindow) ||
+                _phoneHost == IntPtr.Zero || !NativeMethods.IsWindow(_phoneHost))
+                return false;
+
+            if (NativeMethods.GetParent(_scrcpyWindow) != _phoneHost)
+                return false;
+
+            if (!NativeMethods.GetClientRect(_scrcpyWindow, out var scrcpyRect) ||
+                !NativeMethods.GetClientRect(_phoneHost, out var hostRect))
+                return false;
+
+            width = scrcpyRect.Width;
+            height = scrcpyRect.Height;
+            hostWidth = hostRect.Width;
+            hostHeight = hostRect.Height;
+
+            if (width <= 0 || height <= 0 || hostWidth <= 0 || hostHeight <= 0)
+                return false;
+
+            var widthTolerance = Math.Max(4, (int)Math.Ceiling(hostWidth * 0.01));
+            var heightTolerance = Math.Max(4, (int)Math.Ceiling(hostHeight * 0.01));
+
+            return Math.Abs(width - hostWidth) <= widthTolerance &&
+                   Math.Abs(height - hostHeight) <= heightTolerance;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    public async Task StopXhsAsync()
+    {
+        if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
+        await RunAsync(_adb, "-s", Serial, "shell", "am", "force-stop", "com.xingin.xhs");
+        for (var i = 0; i < 20; i++)
+        {
+            if (!await IsXhsRunningAsync()) return;
+            await Task.Delay(100);
+        }
+        throw new InvalidOperationException("小红书未能在预期时间内停止");
+    }
+
+    public async Task StartXhsAsync()
+    {
+        if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
+        await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
         await RunAsync(_adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
+        for (var i = 0; i < 30; i++)
+        {
+            if (await IsXhsRunningAsync()) return;
+            await Task.Delay(100);
+        }
+        throw new InvalidOperationException("小红书未能在预期时间内启动");
     }
 
     private async Task EnsureReadableDensityAsync()

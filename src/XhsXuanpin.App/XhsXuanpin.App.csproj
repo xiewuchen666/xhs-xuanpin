@@ -13,4 +13,8 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Resource Include="Assets\xhs-launch-placeholder.jpg" />
+  </ItemGroup>
+
 </Project>
