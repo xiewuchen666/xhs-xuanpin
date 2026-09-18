@@ -3,44 +3,179 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-        Title="小红书选品工作台" Width="1500" Height="920" MinWidth="1100" MinHeight="720"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="小红书选品工作台" Width="1500" Height="920" MinWidth="1180" MinHeight="720"
+        WindowStyle="None" ResizeMode="CanResize"
         Background="White" FontFamily="Microsoft YaHei UI" WindowStartupLocation="CenterScreen"
         UseLayoutRounding="True" SnapsToDevicePixels="True">
-    <Grid>
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="58"
+                            ResizeBorderThickness="6"
+                            CornerRadius="0"
+                            GlassFrameThickness="0"
+                            UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <Style x:Key="WindowButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="58"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#595959"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Cursor" Value="Arrow"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#F3F3F3"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="CloseWindowButtonStyle" TargetType="Button" BasedOn="{StaticResource WindowButtonStyle}">
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#E81123"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="0,0,6,6" Background="White">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="58"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="PhoneColumn" Width="34*" MinWidth="400" MaxWidth="680"/>
             <ColumnDefinition Width="24"/>
-            <ColumnDefinition Width="66*" MinWidth="560"/>
+            <ColumnDefinition Width="66*" MinWidth="720"/>
         </Grid.ColumnDefinitions>
-        <Grid Grid.Column="0" x:Name="PhonePane" Background="#F7F7F7">
-            <Grid.RowDefinitions><RowDefinition Height="42"/><RowDefinition Height="*"/><RowDefinition Height="58"/></Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Grid.ColumnSpan="3"
+                Background="White" BorderBrush="#EDEDED" BorderThickness="0,0,0,1"/>
+
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="3"
+                    Orientation="Horizontal" VerticalAlignment="Center"
+                    HorizontalAlignment="Left" Margin="16,0,0,0">
+            <Border Width="30" Height="30" CornerRadius="8" Background="#FF2442">
+                <TextBlock Text="选" Foreground="White" FontWeight="SemiBold" FontSize="14"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <TextBlock Text="小红书选品工作台" FontSize="16" FontWeight="SemiBold" Margin="10,0,0,0"
+                       VerticalAlignment="Center"/>
+            <TextBlock Text="人工选品 · V1" FontSize="12" Foreground="#595959" Margin="10,1,0,0"
+                       VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <StackPanel x:Name="GlobalTabsHost" Grid.Row="0" Grid.Column="2"
+                    Orientation="Horizontal" HorizontalAlignment="Left">
+            <Grid Width="88" Height="58">
+                <TextBlock Text="单品监控" FontSize="13" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Border Height="2" Background="#FF2442" VerticalAlignment="Bottom" Margin="15,0"/>
+            </Grid>
+            <Grid Width="88" Height="58">
+                <TextBlock Text="店铺监控" FontSize="13" Foreground="#595959"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+            <Grid Width="88" Height="58">
+                <TextBlock Text="选品中心" FontSize="13" Foreground="#595959"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+        </StackPanel>
+
+        <StackPanel Grid.Row="0" Grid.Column="2"
+                    Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <Border Height="30" Padding="10,0" BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="15">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="GlobalServiceDot" Width="7" Height="7" Fill="#1FA663" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="GlobalServiceStatus" Text="采集服务正常" FontSize="12" Foreground="#595959"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+            <Border Height="30" Margin="8,0,0,0" Padding="10,0"
+                    BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="15">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="全局采集 60 分钟" FontSize="12" Foreground="#595959"/>
+                    <TextBlock Text=" · 待启用" FontSize="11" Foreground="#E89A19"/>
+                </StackPanel>
+            </Border>
+            <TextBlock x:Name="CurrentTimeText" Text="--:--" FontSize="12" Foreground="#595959"
+                       Margin="12,0,8,0" VerticalAlignment="Center"/>
+            <Button x:Name="MinimizeButton" Style="{StaticResource WindowButtonStyle}"
+                    Content="—" Click="MinimizeButton_Click" ToolTip="最小化"/>
+            <Button x:Name="MaximizeButton" Style="{StaticResource WindowButtonStyle}"
+                    Content="□" Click="MaximizeButton_Click" ToolTip="最大化"/>
+            <Button x:Name="CloseButton" Style="{StaticResource CloseWindowButtonStyle}"
+                    Content="×" Click="CloseButton_Click" ToolTip="关闭"/>
+        </StackPanel>
+
+        <Grid Grid.Row="1" Grid.Column="0" x:Name="PhonePane" Background="#F7F7F7">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="42"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="66"/>
+            </Grid.RowDefinitions>
+
             <Grid Grid.Row="0" Margin="12,0">
                 <TextBlock Text="小红书" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                <TextBlock x:Name="AndroidStatus" Text="Android · 正在连接" Foreground="#595959" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                <TextBlock x:Name="AndroidStatus" Text="Android · 正在连接" Foreground="#595959" FontSize="13"
+                           VerticalAlignment="Center" HorizontalAlignment="Right"/>
             </Grid>
+
             <Grid Grid.Row="1" x:Name="PhoneViewport" Margin="8,0,8,8" Background="White" ClipToBounds="True">
-                <wfi:WindowsFormsHost x:Name="PhoneHost" HorizontalAlignment="Center" VerticalAlignment="Center" SnapsToDevicePixels="True"/>
+                <wfi:WindowsFormsHost x:Name="PhoneHost" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      SnapsToDevicePixels="True"/>
             </Grid>
-            <Grid Grid.Row="2" Background="White">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <StackPanel Margin="14,9,8,8" VerticalAlignment="Center">
-                    <TextBlock x:Name="BridgeTitle" Text="请在小红书中打开商品详情" FontSize="12" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="BridgeStatus" Text="进入商品详情后可一键采集" Foreground="#595959" FontSize="12" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
-                </StackPanel>
-                <Button Grid.Column="1" x:Name="MonitorButton" Content="加入监控" Height="36" Margin="0,0,8,0" Padding="14,0" VerticalAlignment="Center" Visibility="Collapsed" Click="MonitorButton_Click"/>
-                <Button Grid.Column="2" x:Name="SelectionButton" Content="加入选品中心" Height="36" Margin="0,0,14,0" Padding="14,0" VerticalAlignment="Center" Visibility="Collapsed" IsEnabled="False" ToolTip="当前阶段不开发选品中心"/>
-            </Grid>
+
+            <Border Grid.Row="2" Background="White" BorderBrush="#EDEDED" BorderThickness="0,1,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="14,8,10,8" VerticalAlignment="Center">
+                        <TextBlock x:Name="BridgeTitle" Text="请在小红书中打开商品详情" FontSize="12"
+                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock x:Name="BridgeStatus" Text="进入商品详情后可一键采集" Foreground="#595959"
+                                   FontSize="12" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" x:Name="MonitorButton" Content="加入监控" Height="34"
+                            Margin="0,0,8,0" Padding="14,0" VerticalAlignment="Center"
+                            BorderBrush="#DDDDDD" BorderThickness="1" Background="White"
+                            IsEnabled="False" Click="MonitorButton_Click"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
+                    <Button Grid.Column="2" x:Name="SelectionButton" Content="加入选品中心" Height="34"
+                            Margin="0,0,14,0" Padding="14,0" VerticalAlignment="Center"
+                            BorderBrush="#FF2442" BorderThickness="1" Background="#FF2442" Foreground="White"
+                            IsEnabled="False" Click="SelectionButton_Click"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
+                </Grid>
+            </Border>
         </Grid>
-        <GridSplitter Grid.Column="1" x:Name="PhoneSplitter"
+
+        <GridSplitter Grid.Row="1" Grid.Column="1" x:Name="PhoneSplitter"
                       Width="6" HorizontalAlignment="Center" VerticalAlignment="Stretch"
                       Background="#EFEFEF" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
-                      ShowsPreview="True" DragCompleted="PhoneSplitter_DragCompleted"/>
-        <Button Grid.Column="1" x:Name="PhoneToggle" Click="PhoneToggle_Click" Panel.ZIndex="1"
+                      ShowsPreview="True" DragCompleted="PhoneSplitter_DragCompleted"
+                      shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
+
+        <Button Grid.Row="1" Grid.Column="1" x:Name="PhoneToggle"
+                Click="PhoneToggle_Click" Panel.ZIndex="1"
                 Width="20" Height="64" Padding="0" HorizontalAlignment="Center" VerticalAlignment="Center"
                 BorderBrush="#DDDDDD" BorderThickness="1" Background="White" Foreground="#595959"
-                FontSize="16" ToolTip="收起手机预览">
-            <TextBlock x:Name="PhoneToggleLabel" Text="‹" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                FontSize="16" ToolTip="收起手机预览"
+                shell:WindowChrome.IsHitTestVisibleInChrome="True">
+            <TextBlock x:Name="PhoneToggleLabel" Text="‹"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Button>
-        <Grid Grid.Column="2"><wv2:WebView2 x:Name="Workspace"/></Grid>
+
+        <Grid Grid.Row="1" Grid.Column="2">
+            <wv2:WebView2 x:Name="Workspace"/>
+        </Grid>
     </Grid>
 </Window>

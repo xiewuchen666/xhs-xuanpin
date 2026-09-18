@@ -5,22 +5,81 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>小红书选品工作台</title>
   <style>
-    :root{--red:#FF2442;--ink:#1A1A1A;--ink2:#595959;--ink3:#666;--soft:#F7F7F7;--line:#EDEDED;--green:#1FA663}
+    :root{--red:#FF2442;--red-hover:#F20D32;--red-soft:#FFF1F3;--red-border:#FFD6DC;--ink:#1A1A1A;--ink2:#595959;--ink3:#666666;--soft:#F7F7F7;--muted:#FAFAFA;--line:#EDEDED;--line2:#DDDDDD;--green:#1FA663;--amber:#E89A19;--danger:#E5484D}
     *{box-sizing:border-box}html,body{margin:0;height:100%;font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;color:var(--ink);font-size:14px}
-    body{display:flex;flex-direction:column;background:#fff}.topbar{height:58px;display:flex;align-items:center;border-bottom:1px solid var(--line);padding:0 18px;flex:none}
-    .brand{display:flex;align-items:center;gap:10px;min-width:292px}.mark{width:30px;height:30px;border-radius:8px;background:var(--red);color:#fff;display:grid;place-items:center;font-weight:600}.brand b{font-size:16px}.brand span{font-size:12px;color:var(--ink2);margin-left:6px}
-    nav{align-self:stretch;display:flex}.tab{height:58px;padding:0 18px;display:flex;align-items:center;color:var(--ink2);font-weight:500}.tab.active{color:var(--ink);position:relative}.tab.active:after{content:"";position:absolute;left:18px;right:18px;bottom:0;height:2px;background:var(--red)}
-    .service{margin-left:auto;border:1px solid #ddd;border-radius:999px;padding:6px 10px;color:var(--ink2);font-size:13px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:6px}
-    main{min-height:0;flex:1;display:flex;flex-direction:column}.head{padding:18px 22px 12px;border-bottom:1px solid var(--line)}h1{font-size:22px;font-weight:500;margin:0}.subtitle{font-size:13px;color:var(--ink2);margin-top:6px}.metric{display:inline-block;margin-top:14px;min-width:128px;height:58px;padding:9px 12px;background:#fafafa;border:1px solid var(--line);border-radius:8px}.metric span{display:block;color:var(--ink2);font-size:12px}.metric b{font-size:18px;font-weight:600}
-    .notice{margin:18px 22px 0;padding:12px 14px;background:var(--soft);border:1px solid var(--line);border-radius:8px;color:var(--ink2);line-height:1.6}.tablewrap{padding:0 22px;overflow:auto}.empty{padding:56px 0;text-align:center;color:var(--ink3)}
-    table{width:100%;border-collapse:collapse;table-layout:fixed}th{height:44px;text-align:left;color:var(--ink2);font-size:12px;font-weight:600;border-bottom:1px solid var(--line)}td{height:78px;border-bottom:1px solid var(--line);font-size:13px}.product{display:flex;align-items:center;gap:10px;min-width:0}.product img{width:52px;height:52px;object-fit:cover;border:1px solid var(--line);border-radius:8px;background:var(--soft)}.copy{min-width:0}.copy b,.copy span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.copy b{font-weight:500}.copy span{font-size:12px;color:var(--ink3);margin-top:5px}.num{font-variant-numeric:tabular-nums;font-weight:600}.status{display:inline-flex;border-radius:999px;padding:4px 8px;background:#eff9f4;color:var(--green);font-size:11px}
+    button,input,select{font:inherit}body{display:flex;flex-direction:column;background:#fff}
+    main{min-height:0;flex:1;display:flex;flex-direction:column}.head{padding:18px 22px 12px;border-bottom:1px solid var(--line);background:#fff}.titleline{display:flex;align-items:flex-end;gap:10px}.titleline h1{font-size:22px;line-height:1.3;font-weight:500;margin:0}.titleline .count{font-size:13px;color:var(--ink2);font-weight:500;margin-bottom:2px}.subtitle{font-size:13px;color:var(--ink2);margin-top:6px}.metrics{display:flex;gap:10px;margin-top:14px}.metric{min-width:128px;height:58px;padding:9px 12px;background:var(--muted);border:1px solid var(--line);border-radius:8px}.metric span{display:block;color:var(--ink2);font-size:12px}.metric b{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+    .toolbar{height:58px;display:flex;align-items:center;gap:8px;padding:10px 22px;border-bottom:1px solid var(--line);background:#fff}.searchbox{width:250px;height:36px;border-radius:18px;background:var(--soft);display:flex;align-items:center;gap:8px;padding:0 13px;color:var(--ink3)}.searchbox input{width:100%;border:0;outline:0;background:transparent;color:var(--ink);font-size:13px}.searchbox input::placeholder{color:#999}.selectbox{height:36px;border:1px solid var(--line2);border-radius:8px;background:#fff;color:var(--ink2);padding:0 28px 0 10px;font-size:12px;outline:0}.toolbar .grow{flex:1}.toolbar .btn{height:36px}.toolbar .btn[disabled]{opacity:.5}.toolbar-note{font-size:12px;color:var(--ink3);white-space:nowrap}
+    .notice{margin:14px 22px 0;padding:10px 13px;background:var(--soft);border:1px solid var(--line);border-radius:8px;color:var(--ink2);font-size:13px;line-height:1.5}.notice.success{background:#F2FAF6;border-color:#D8EEE3;color:var(--green)}.notice.error{background:#FFF3F4;border-color:#F7CDD1;color:var(--danger)}.notice[hidden]{display:none}
+    .tablewrap{padding:0 22px 24px;overflow:auto}.empty{padding:64px 0;text-align:center;color:var(--ink3);font-size:13px}table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:1320px}th{height:42px;text-align:left;color:var(--ink2);font-size:12px;font-weight:600;border-bottom:1px solid var(--line)}td{height:78px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}.product{display:flex;align-items:center;gap:10px;min-width:0}.product img{width:50px;height:50px;object-fit:cover;border:1px solid var(--line);border-radius:8px;background:var(--soft)}.copy{min-width:0}.copy b,.copy span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.copy b{font-size:13px;font-weight:500}.copy span{font-size:12px;color:var(--ink3);margin-top:4px}.num{font-variant-numeric:tabular-nums;font-weight:600}.metric-value,.metric-hint{display:block}.metric-value.positive{color:var(--green)}.metric-hint{font-size:12px;line-height:1.35;font-weight:400;color:var(--ink3);margin-top:3px;white-space:nowrap}.muted{color:var(--ink3);font-size:12px}.status{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:12px;line-height:1.2;white-space:nowrap}.status.active,.status.success{background:#EFF9F4;color:var(--green)}.status.paused,.status.muted{background:#F2F2F2;color:var(--ink3)}.status.warning{background:#FFF7E8;color:var(--amber)}.status.danger{background:#FFF0F1;color:var(--danger)}.selected{display:inline-flex;margin-top:4px;border-radius:999px;padding:3px 7px;background:var(--red-soft);color:var(--red);font-size:12px;line-height:1.25;font-style:normal}
+    .actions{display:flex;align-items:center;justify-content:flex-start}.more-btn{width:32px;height:30px;border:1px solid transparent;border-radius:6px;background:#fff;color:var(--ink2);cursor:pointer;font-size:18px;line-height:18px;letter-spacing:1px;padding:0 0 4px}.more-btn:hover{background:#F5F5F5;border-color:var(--line)}.btn{height:30px;padding:0 10px;border:1px solid var(--line2);border-radius:6px;background:#fff;color:var(--ink);cursor:pointer;font-size:12px;white-space:nowrap}.btn:hover:not(:disabled){border-color:#BDBDBD;background:#FAFAFA}.btn.primary{background:var(--red);border-color:var(--red);color:#fff}.btn.primary:hover:not(:disabled){background:var(--red-hover);border-color:var(--red-hover)}.btn.danger{color:var(--danger);border-color:#F2C9CD}.btn:disabled{opacity:.45;cursor:not-allowed}.btn.busy{min-width:72px}
+    .action-overlay{position:fixed;inset:0;background:rgba(0,0,0,.30);display:flex;align-items:center;justify-content:center;padding:24px;z-index:1000}.action-overlay[hidden]{display:none}.action-panel{width:min(448px,calc(100vw - 48px));background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.12);padding:18px}.action-panel-head{display:flex;align-items:flex-start;gap:12px}.action-panel-copy{min-width:0;flex:1}.action-panel-copy h2{margin:0;font-size:16px;font-weight:500;line-height:1.45}.action-panel-copy p{margin:5px 0 0;color:var(--ink3);font-size:12px;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.action-close{width:28px;height:28px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ink3);cursor:pointer;font-size:18px}.action-close:hover{background:#F5F5F5;border-color:var(--line)}.action-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.action-tile{min-height:72px;border:1px solid var(--line);border-radius:8px;background:#fff;text-align:left;padding:11px 12px;cursor:pointer;display:flex;align-items:center;gap:10px}.action-tile:hover:not(:disabled){border-color:var(--line2);background:#FAFAFA}.action-tile:disabled{opacity:.45;cursor:not-allowed}.action-icon{width:32px;height:32px;border-radius:8px;background:var(--soft);display:grid;place-items:center;font-size:15px;flex:none}.action-tile.primary .action-icon{background:var(--red-soft);color:var(--red)}.action-tile.danger .action-icon{background:#FFF2F2;color:var(--danger)}.action-tile strong,.action-tile small{display:block}.action-tile strong{font-size:13px;font-weight:500;line-height:1.35}.action-tile small{font-size:12px;color:var(--ink3);margin-top:3px;line-height:1.4}
+    @media(max-width:1200px){.head{padding-left:16px;padding-right:16px}.toolbar{padding-left:16px;padding-right:16px}.searchbox{width:220px}.tablewrap{padding-left:16px;padding-right:16px}.notice{margin-left:16px;margin-right:16px}}
   </style>
 </head>
 <body>
-  <header class="topbar"><div class="brand"><div class="mark">选</div><b>小红书选品工作台 <span>人工选品 · V1</span></b></div><nav><div class="tab active">单品监控</div><div class="tab">店铺监控</div><div class="tab">选品中心</div></nav><div class="service"><i class="dot"></i>采集服务正常</div></header>
-  <main><section class="head"><h1>单品监控</h1><div class="subtitle">当前阶段仅验证真实商品采集、独立入库与显示。</div><div class="metric"><span>已入库商品</span><b id="count">0</b></div></section>
-    <div class="notice" id="notice">请在左侧打开商品详情，点击“加入监控”。工作台会使用正常分享流程取得链接并执行首次真实采集。</div>
-    <div class="tablewrap" id="content"><div class="empty">尚无商品</div></div>
-  </main><script src="/app.js"></script>
-</body></html>
+  <main>
+    <section class="head">
+      <div class="titleline"><h1>单品监控</h1><span class="count" id="productCount">0 个商品</span></div>
+      <div class="subtitle">只展示你主动加入监控的商品；指标口径沿用已确认采集规则。</div>
+      <div class="metrics">
+        <div class="metric"><span>监控中</span><b id="monitoringCount">0</b></div>
+        <div class="metric"><span>今日有新增</span><b id="todayGrowthCount">—</b></div>
+        <div class="metric"><span>近24h新增合计</span><b id="rolling24Total">—</b></div>
+        <div class="metric"><span>需关注</span><b id="attentionCount">0</b></div>
+      </div>
+    </section>
 
+    <div class="toolbar">
+      <label class="searchbox" aria-label="搜索商品或店铺">
+        <span>⌕</span>
+        <input id="toolbarSearch" type="search" placeholder="搜索商品或店铺">
+      </label>
+      <select class="selectbox" id="shopFilter" aria-label="店铺筛选">
+        <option value="">全部店铺</option>
+      </select>
+      <select class="selectbox" id="sortSelect" aria-label="排序方式">
+        <option value="rolling24_desc">近24h新增 ↓</option>
+        <option value="today_desc">今日新增 ↓</option>
+        <option value="sales_desc">累计销量 ↓</option>
+        <option value="updated_desc">最近更新 ↓</option>
+      </select>
+      <div class="grow"></div>
+      <button class="btn" id="exportButton" type="button" disabled title="导出将在后续阶段实现">⇩ 导出</button>
+      <button class="btn primary" id="collectPageButton" type="button">立即采集本页</button>
+      <button class="btn" id="settingsButton" type="button">设置</button>
+    </div>
+
+    <div class="notice" id="notice">请在左侧打开商品详情，点击“加入监控”。首次采集成功后会自动出现在这里。</div>
+    <div class="tablewrap" id="content"><div class="empty">尚无监控商品</div></div>
+  </main>
+
+  <div class="action-overlay" id="actionOverlay" hidden>
+    <section class="action-panel" role="dialog" aria-modal="true" aria-labelledby="actionTitle">
+      <div class="action-panel-head">
+        <div class="action-panel-copy">
+          <h2 id="actionTitle">商品操作</h2>
+          <p id="actionProductTitle">—</p>
+        </div>
+        <button class="action-close" id="actionClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="action-grid">
+        <button class="action-tile primary" id="actionCollect" type="button" data-modal-action="collect">
+          <span class="action-icon">↻</span><span><strong>立即采集</strong><small>立即获取一次最新商品数据</small></span>
+        </button>
+        <button class="action-tile" id="actionPause" type="button" data-modal-action="pause">
+          <span class="action-icon">Ⅱ</span><span><strong>暂停监控</strong><small>停止后续自动采集，可随时恢复</small></span>
+        </button>
+        <button class="action-tile" id="actionSelection" type="button" data-modal-action="selection">
+          <span class="action-icon">☆</span><span><strong>加入选品中心</strong><small>保留监控，同时加入选品工作区</small></span>
+        </button>
+        <button class="action-tile danger" id="actionRemove" type="button" data-modal-action="remove">
+          <span class="action-icon">−</span><span><strong>移出监控</strong><small>仅移出列表，历史采集数据保留</small></span>
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

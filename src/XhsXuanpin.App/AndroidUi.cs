@@ -12,6 +12,13 @@ internal sealed class AndroidUi(string adbPath, string serial)
         return IsProductDetailActivity(activities);
     }
 
+    public async Task<AndroidProductSummary?> GetCurrentProductSummaryAsync()
+    {
+        if (!await IsProductDetailAsync()) return null;
+        var page = await DumpAsync();
+        return ParseProductSummary(page);
+    }
+
     public async Task CopyCurrentProductLinkAsync()
     {
         var page = await DumpAsync();
@@ -57,6 +64,43 @@ internal sealed class AndroidUi(string adbPath, string serial)
         var hasPurchaseAction = document.Contains("立即购买", StringComparison.Ordinal) ||
                                 document.Contains("加入购物车", StringComparison.Ordinal);
         return hasShare && hasPurchaseAction;
+    }
+
+    internal static AndroidProductSummary? ParseProductSummary(string document)
+    {
+        if (string.IsNullOrWhiteSpace(document)) return null;
+
+        var titleMatch = Regex.Match(
+            document,
+            "(?:text|content-desc)=\"商品名称，([^\"]+)\"",
+            RegexOptions.IgnoreCase);
+        if (!titleMatch.Success)
+        {
+            titleMatch = Regex.Match(
+                document,
+                "(?:text|content-desc)=\"([^\"]{6,})\"[^>]*(?:text|content-desc)=\"商品名称",
+                RegexOptions.IgnoreCase);
+        }
+
+        var priceMatch = Regex.Match(
+            document,
+            "(?:text|content-desc)=\"到手价¥([0-9]+(?:\\.[0-9]+)?)\"",
+            RegexOptions.IgnoreCase);
+        if (!priceMatch.Success)
+        {
+            priceMatch = Regex.Match(
+                document,
+                "商品价格，到手价([0-9]+(?:\\.[0-9]+)?)元",
+                RegexOptions.IgnoreCase);
+        }
+
+        var title = titleMatch.Success
+            ? System.Net.WebUtility.HtmlDecode(titleMatch.Groups[1].Value).Trim()
+            : "";
+        var price = priceMatch.Success ? $"¥{priceMatch.Groups[1].Value}" : "";
+
+        if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(price)) return null;
+        return new AndroidProductSummary(title, price);
     }
 
     internal static (int X, int Y)? FindCenter(string document, string label)

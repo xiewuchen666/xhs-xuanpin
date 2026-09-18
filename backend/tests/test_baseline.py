@@ -45,7 +45,7 @@ class DatabaseTests(unittest.TestCase):
                    "price": 24.9, "total_sales": 100, "sales_raw": "已售100",
                    "sales_precision": "exact", "observed_at": "2026-09-18 10:00:00"}
         first = db.persist("https://xiaohongshu.com/goods-detail/abc", payload)
-        payload.update(total_sales=110, observed_at="2026-09-18 11:00:00")
+        payload.update(total_sales=110, sales_raw="已售110", observed_at="2026-09-18 11:00:00")
         second = db.persist("https://xiaohongshu.com/goods-detail/abc", payload)
         self.assertEqual(first, second)
         self.assertEqual(db.list_products()[0]["total_sales"], 110)

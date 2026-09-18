@@ -48,6 +48,9 @@ internal sealed class RuntimeCoordinator : IDisposable
     public Task<bool> IsProductDetailAsync() =>
         _androidUi?.IsProductDetailAsync() ?? Task.FromResult(false);
 
+    public Task<AndroidProductSummary?> GetCurrentProductSummaryAsync() =>
+        _androidUi?.GetCurrentProductSummaryAsync() ?? Task.FromResult<AndroidProductSummary?>(null);
+
     public Task CopyCurrentProductLinkAsync() =>
         _androidUi?.CopyCurrentProductLinkAsync() ?? throw new InvalidOperationException("Android 尚未连接");
 
@@ -430,6 +433,7 @@ internal static class NativeMethods
 {
     internal const int GwlStyle = -16, SwHide = 0, SwShow = 5;
     internal const long WsChild = 0x40000000, WsPopup = 0x80000000, WsCaption = 0x00C00000, WsThickFrame = 0x00040000;
+    internal const long WsClipChildren = 0x02000000, WsClipSiblings = 0x04000000;
     internal delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -479,6 +483,10 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetClientRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetWindowRect(IntPtr window, out Rect rect);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
