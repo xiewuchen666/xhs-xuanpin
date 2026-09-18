@@ -195,6 +195,28 @@ def is_in_single_monitor(product_id: int) -> bool:
         ).fetchone() is not None
 
 
+def _enrich_rows(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, Any]],
+    *,
+    as_of=None,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    ids = [int(row["id"]) for row in rows]
+    placeholders = ",".join("?" for _ in ids)
+    history: dict[int, list[dict[str, Any]]] = {product_id: [] for product_id in ids}
+    for snap in conn.execute(
+        f"SELECT * FROM snapshots WHERE product_id IN ({placeholders}) ORDER BY product_id,collected_at,id",
+        ids,
+    ):
+        history[int(snap["product_id"])].append(dict(snap))
+    return [
+        metrics.enrich(row, history[int(row["id"])], as_of=as_of)
+        for row in rows
+    ]
+
+
 def list_products(as_of=None) -> list[dict[str, Any]]:
     with closing(connect()) as conn:
         rows = [dict(row) for row in conn.execute("""
@@ -207,19 +229,104 @@ def list_products(as_of=None) -> list[dict[str, Any]]:
             LEFT JOIN selection_pool_products sp ON sp.product_id=p.id
             ORDER BY p.last_collected_at DESC,p.id DESC
         """).fetchall()]
-        if not rows:
-            return []
-        ids = [row["id"] for row in rows]
-        placeholders = ",".join("?" for _ in ids)
-        history: dict[int, list[dict[str, Any]]] = {product_id: [] for product_id in ids}
-        for snap in conn.execute(
-            f"SELECT * FROM snapshots WHERE product_id IN ({placeholders}) ORDER BY product_id,collected_at,id",
-            ids,
-        ):
-            history[int(snap["product_id"])].append(dict(snap))
+        return _enrich_rows(conn, rows, as_of=as_of)
+
+
+def list_selection_products(as_of=None) -> list[dict[str, Any]]:
+    with closing(connect()) as conn:
+        rows = [dict(row) for row in conn.execute("""
+            SELECT
+              p.*,
+              sp.added_at AS selected_at,
+              CASE WHEN sm.product_id IS NULL THEN 0 ELSE 1 END AS in_single_monitor,
+              1 AS in_selection_pool
+            FROM products p
+            JOIN selection_pool_products sp ON sp.product_id=p.id
+            LEFT JOIN single_monitor_products sm ON sm.product_id=p.id
+            ORDER BY sp.added_at DESC,p.last_collected_at DESC,p.id DESC
+        """).fetchall()]
+        return _enrich_rows(conn, rows, as_of=as_of)
+
+
+def _shop_identity(product: dict[str, Any]) -> tuple[str, str]:
+    shop_id = str(product.get("shop_id") or "").strip()
+    shop_name = str(product.get("shop_name") or "").strip() or "店铺未识别"
+    if shop_id:
+        return f"id:{shop_id}", shop_name
+    return f"name:{shop_name}", shop_name
+
+
+def _aggregate_metric(products: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    metric_rows = [product.get(key) or {} for product in products]
+    valid = [metric for metric in metric_rows if metric.get("value") is not None]
+    approximate = any(metric.get("quality") == "approximate" for metric in valid)
+    return {
+        "value": sum(int(metric.get("value") or 0) for metric in valid) if valid else None,
+        "quality": "approximate" if approximate else ("exact" if valid else "missing"),
+        "covered": len(valid),
+        "total": len(products),
+        "approximate": approximate,
+        "reason": (
+            f"店铺内 {len(valid)}/{len(products)} 个已监控商品具备有效指标；仅汇总有效商品"
+            if valid
+            else "店铺内暂无商品具备可汇总的有效指标"
+        ),
+    }
+
+
+def _shop_health(products: list[dict[str, Any]]) -> tuple[str, str]:
+    if any(product.get("health") == "danger" for product in products):
+        return "danger", "存在异常"
+    if any(product.get("health") == "warning" for product in products):
+        return "warning", "需更新"
+    if products and all(product.get("monitor_state") == "paused" for product in products):
+        return "muted", "已暂停"
+    if any(product.get("health") == "muted" for product in products):
+        return "muted", "部分暂停"
+    return "success", "正常"
+
+
+def list_shops(as_of=None) -> list[dict[str, Any]]:
+    products = list_products(as_of=as_of)
+    grouped: dict[str, dict[str, Any]] = {}
+    for product in products:
+        shop_key, shop_name = _shop_identity(product)
+        group = grouped.setdefault(
+            shop_key,
+            {
+                "shop_key": shop_key,
+                "shop_id": str(product.get("shop_id") or ""),
+                "shop_name": shop_name,
+                "products": [],
+            },
+        )
+        group["products"].append(product)
+
+    result: list[dict[str, Any]] = []
+    for group in grouped.values():
+        items = group.pop("products")
+        health, health_label = _shop_health(items)
+        latest = max((str(item.get("last_collected_at") or "") for item in items), default="")
+        result.append({
+            **group,
+            "product_count": len(items),
+            "active_count": sum(1 for item in items if item.get("monitor_state") == "active"),
+            "today": _aggregate_metric(items, "today"),
+            "rolling24": _aggregate_metric(items, "rolling24"),
+            "last_collected_at": latest,
+            "health": health,
+            "health_label": health_label,
+            "products": items,
+        })
+    result.sort(key=lambda row: (row["last_collected_at"], row["shop_name"]), reverse=True)
+    return result
+
+
+def list_shop_products(shop_key: str, as_of=None) -> list[dict[str, Any]]:
     return [
-        metrics.enrich(row, history[row["id"]], as_of=as_of)
-        for row in rows
+        product
+        for product in list_products(as_of=as_of)
+        if _shop_identity(product)[0] == shop_key
     ]
 
 
@@ -252,8 +359,22 @@ def add_selection(product_id: int) -> None:
         if not conn.execute("SELECT 1 FROM products WHERE id=?", (product_id,)).fetchone():
             raise ValueError("商品不存在")
         conn.execute(
+            "UPDATE products SET monitor_state='active' WHERE id=?",
+            (product_id,),
+        )
+        conn.execute(
             "INSERT OR IGNORE INTO selection_pool_products(product_id,added_at) VALUES(?,?)",
             (product_id, now_text()),
+        )
+
+
+def remove_selection(product_id: int) -> None:
+    with closing(connect()) as conn, conn:
+        if not conn.execute("SELECT 1 FROM products WHERE id=?", (product_id,)).fetchone():
+            raise ValueError("商品不存在")
+        conn.execute(
+            "DELETE FROM selection_pool_products WHERE product_id=?",
+            (product_id,),
         )
 
 

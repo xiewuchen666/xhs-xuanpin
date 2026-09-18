@@ -36,13 +36,31 @@ def create_app(testing: bool = False) -> Flask:
     def products():
         return jsonify(db.list_products())
 
+    @app.get("/api/shops")
+    def shops():
+        return jsonify(db.list_shops())
+
+    @app.get("/api/shops/<path:shop_key>/products")
+    def shop_products(shop_key: str):
+        return jsonify(db.list_shop_products(shop_key))
+
+    @app.get("/api/selection")
+    def selection_products():
+        return jsonify(db.list_selection_products())
+
     @app.post("/api/products/collect")
     def collect():
         try:
-            url = collector.validate_url((request.get_json(silent=True) or {}).get("url", ""))
+            body = request.get_json(silent=True) or {}
+            scope = str(body.get("scope") or "single").strip()
+            if scope not in {"single", "selection"}:
+                return _api_error("无效加入范围")
+            url = collector.validate_url(body.get("url", ""))
             data = collector.collect_product(url)
-            product_id = db.persist(url, data, join_single=True)
-            return jsonify(ok=True, product_id=product_id, product=data)
+            product_id = db.persist(url, data, join_single=(scope == "single"))
+            if scope == "selection":
+                db.add_selection(product_id)
+            return jsonify(ok=True, product_id=product_id, product=data, scope=scope)
         except (ValueError, RuntimeError) as exc:
             return _api_error(str(exc))
         except Exception:
@@ -95,6 +113,14 @@ def create_app(testing: bool = False) -> Flask:
         try:
             db.add_selection(product_id)
             return jsonify(ok=True, product_id=product_id, in_selection_pool=True)
+        except ValueError as exc:
+            return _api_error(str(exc), 404)
+
+    @app.delete("/api/products/<int:product_id>/selection")
+    def leave_selection(product_id: int):
+        try:
+            db.remove_selection(product_id)
+            return jsonify(ok=True, product_id=product_id, in_selection_pool=False)
         except ValueError as exc:
             return _api_error(str(exc), 404)
 

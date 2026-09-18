@@ -154,6 +154,7 @@ class PhaseOneApiTests(unittest.TestCase):
         response = self.client.delete(f"/api/products/{self.product_id}/monitor")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get("/api/products").get_json(), [])
+        self.assertEqual(self.client.get("/api/selection").get_json()[0]["id"], self.product_id)
         self.assertEqual(db.snapshot_count(self.product_id), 1)
 
     def test_collect_one_adds_snapshot_and_paused_product_is_blocked(self):

@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
 
@@ -14,6 +16,9 @@ public partial class MainWindow : Window
     private readonly RuntimeCoordinator _runtime = new();
     private readonly System.Windows.Forms.Panel _phonePanel = new() { BackColor = System.Drawing.Color.FromArgb(36, 36, 36) };
     private readonly DispatcherTimer _pageStateTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private NativeMethods.LowLevelMouseProc? _phoneMouseHookProc;
+    private IntPtr _phoneMouseHook;
+    private bool _phoneKeyboardActive;
     private bool _phoneVisible = true;
     private GridLength _expandedPhoneWidth = new(34, GridUnitType.Star);
     private bool _runtimeReady;
@@ -23,6 +28,7 @@ public partial class MainWindow : Window
     private DateTime _lastProductSummaryRefreshUtc = DateTime.MinValue;
     private AndroidProductSummary? _currentProductSummary;
     private bool _windowSizing;
+    private string _workspaceView = "single";
 
     private const int WmNcHitTest = 0x0084;
     private const int WmEnterSizeMove = 0x0231;
@@ -64,6 +70,7 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _pageStateTimer.Stop();
+            RemovePhoneMouseHook();
             _runtime.Dispose();
         };
     }
@@ -76,7 +83,10 @@ public partial class MainWindow : Window
             await _runtime.StartAsync(_phonePanel.Handle);
             _runtime.ResizePhone(_phonePanel.ClientSize);
             SetRuntimeHealthy();
-            Workspace.Source = new Uri("http://127.0.0.1:17861/");
+            InstallPhoneMouseHook();
+            await Workspace.EnsureCoreWebView2Async();
+            Workspace.CoreWebView2.NewWindowRequested += Workspace_NewWindowRequested;
+            NavigateWorkspace("single");
             FitPhoneSurface();
             _runtimeReady = true;
             _pageStateTimer.Start();
@@ -97,6 +107,106 @@ public partial class MainWindow : Window
         AndroidStatus.Text = "Android · 已连接";
         GlobalServiceStatus.Text = "采集服务正常";
         GlobalServiceDot.Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1F, 0xA6, 0x63));
+    }
+
+    private void InstallPhoneMouseHook()
+    {
+        if (_phoneMouseHook != IntPtr.Zero) return;
+        _phoneMouseHookProc = PhoneMouseHookCallback;
+        _phoneMouseHook = NativeMethods.SetWindowsHookEx(
+            NativeMethods.WhMouseLl,
+            _phoneMouseHookProc,
+            NativeMethods.GetModuleHandle(null),
+            0);
+        if (_phoneMouseHook == IntPtr.Zero)
+            throw new InvalidOperationException("无法初始化手机输入焦点监听");
+    }
+
+    private void RemovePhoneMouseHook()
+    {
+        if (_phoneMouseHook != IntPtr.Zero)
+        {
+            NativeMethods.UnhookWindowsHookEx(_phoneMouseHook);
+            _phoneMouseHook = IntPtr.Zero;
+        }
+        _phoneMouseHookProc = null;
+    }
+
+    private IntPtr PhoneMouseHookCallback(int code, IntPtr message, IntPtr data)
+    {
+        if (code >= 0 && message.ToInt32() == NativeMethods.WmLButtonDown)
+        {
+            var info = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMethods.MsllHookStruct>(data);
+            var insidePhone = _runtime.ContainsPhoneScreenPoint(info.Point.X, info.Point.Y);
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                _phoneKeyboardActive = insidePhone && _phoneVisible;
+                if (_phoneKeyboardActive)
+                {
+                    PhoneKeyboardSink.Focus();
+                    Keyboard.Focus(PhoneKeyboardSink);
+                }
+            }));
+        }
+
+        return NativeMethods.CallNextHookEx(_phoneMouseHook, code, message, data);
+    }
+
+    private async void PhoneKeyboardSink_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (!_phoneKeyboardActive || string.IsNullOrEmpty(e.Text)) return;
+        e.Handled = true;
+        await _runtime.InjectTextAsync(e.Text);
+    }
+
+    private async void PhoneKeyboardSink_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (!_phoneKeyboardActive) return;
+
+        if (e.Key == Key.V && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            if (System.Windows.Clipboard.ContainsText())
+            {
+                e.Handled = true;
+                await _runtime.InjectTextAsync(System.Windows.Clipboard.GetText());
+            }
+            return;
+        }
+
+        var keyCode = e.Key switch
+        {
+            Key.Back => "KEYCODE_DEL",
+            Key.Delete => "KEYCODE_FORWARD_DEL",
+            Key.Enter => "KEYCODE_ENTER",
+            Key.Escape => "KEYCODE_BACK",
+            Key.Left => "KEYCODE_DPAD_LEFT",
+            Key.Right => "KEYCODE_DPAD_RIGHT",
+            Key.Up => "KEYCODE_DPAD_UP",
+            Key.Down => "KEYCODE_DPAD_DOWN",
+            Key.Home => "KEYCODE_MOVE_HOME",
+            Key.End => "KEYCODE_MOVE_END",
+            Key.Tab => "KEYCODE_TAB",
+            _ => null
+        };
+
+        if (keyCode is null) return;
+        e.Handled = true;
+        await _runtime.InjectKeyEventAsync(keyCode);
+    }
+
+    private static void Workspace_NewWindowRequested(
+        object? sender,
+        Microsoft.Web.WebView2.Core.CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return;
+
+        e.Handled = true;
+        Process.Start(new ProcessStartInfo(uri.AbsoluteUri)
+        {
+            UseShellExecute = true
+        });
     }
 
     private void FitPhoneSurface()
@@ -214,6 +324,42 @@ public partial class MainWindow : Window
         return new IntPtr(hit);
     }
 
+    private void SingleTabButton_Click(object sender, RoutedEventArgs e) =>
+        NavigateWorkspace("single");
+
+    private void ShopsTabButton_Click(object sender, RoutedEventArgs e) =>
+        NavigateWorkspace("shops");
+
+    private void SelectionTabButton_Click(object sender, RoutedEventArgs e) =>
+        NavigateWorkspace("selection");
+
+    private void NavigateWorkspace(string view)
+    {
+        _workspaceView = view;
+        UpdateWorkspaceTabs();
+        var uri = new Uri($"http://127.0.0.1:17861/?view={Uri.EscapeDataString(view)}");
+        if (Workspace.Source == uri) return;
+        Workspace.Source = uri;
+    }
+
+    private void UpdateWorkspaceTabs()
+    {
+        var active = System.Windows.Media.Brushes.Black;
+        var inactive = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x59, 0x59, 0x59));
+
+        SingleTabIndicator.Visibility = _workspaceView == "single" ? Visibility.Visible : Visibility.Collapsed;
+        ShopsTabIndicator.Visibility = _workspaceView == "shops" ? Visibility.Visible : Visibility.Collapsed;
+        SelectionTabIndicator.Visibility = _workspaceView == "selection" ? Visibility.Visible : Visibility.Collapsed;
+
+        SingleTabText.Foreground = _workspaceView == "single" ? active : inactive;
+        ShopsTabText.Foreground = _workspaceView == "shops" ? active : inactive;
+        SelectionTabText.Foreground = _workspaceView == "selection" ? active : inactive;
+
+        SingleTabText.FontWeight = _workspaceView == "single" ? FontWeights.SemiBold : FontWeights.Normal;
+        ShopsTabText.FontWeight = _workspaceView == "shops" ? FontWeights.SemiBold : FontWeights.Normal;
+        SelectionTabText.FontWeight = _workspaceView == "selection" ? FontWeights.SemiBold : FontWeights.Normal;
+    }
+
     private void MinimizeButton_Click(object sender, RoutedEventArgs e) =>
         WindowState = WindowState.Minimized;
 
@@ -327,20 +473,12 @@ public partial class MainWindow : Window
 
             BridgeTitle.Text = "正在执行首次真实采集";
             BridgeStatus.Text = url;
-            using var collectResponse = await Http.PostAsJsonAsync("/api/products/collect", new { url });
+            using var collectResponse = await Http.PostAsJsonAsync(
+                "/api/products/collect",
+                new { url, scope = addToSelection ? "selection" : "single" });
             var result = await collectResponse.Content.ReadFromJsonAsync<CollectResponse>();
             if (!collectResponse.IsSuccessStatusCode || result?.ok != true)
                 throw new InvalidOperationException(result?.error ?? "采集失败");
-
-            if (addToSelection)
-            {
-                using var selectionResponse = await Http.PostAsJsonAsync(
-                    $"/api/products/{result.product_id}/selection",
-                    new { });
-                var selectionResult = await selectionResponse.Content.ReadFromJsonAsync<ActionResponse>();
-                if (!selectionResponse.IsSuccessStatusCode || selectionResult?.ok != true)
-                    throw new InvalidOperationException(selectionResult?.error ?? "加入选品中心失败");
-            }
 
             BridgeTitle.Text = addToSelection ? "已加入选品中心" : "已加入监控";
             BridgeStatus.Text = addToSelection

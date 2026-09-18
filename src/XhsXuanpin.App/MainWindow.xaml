@@ -41,6 +41,38 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="ProductActionButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="#D0D5DD"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#344054"/>
+            <Setter Property="Opacity" Value="1"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#F7F7F8"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#F7F7F8"/>
+                    <Setter Property="BorderBrush" Value="#E5E7EB"/>
+                    <Setter Property="Foreground" Value="#B5BAC3"/>
+                    <Setter Property="Opacity" Value="1"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="GlobalTabButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="88"/>
+            <Setter Property="Height" Value="58"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#FAFAFA"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="0,0,6,6" Background="White">
@@ -53,6 +85,14 @@
             <ColumnDefinition Width="24"/>
             <ColumnDefinition Width="66*" MinWidth="720"/>
         </Grid.ColumnDefinitions>
+
+        <TextBox x:Name="PhoneKeyboardSink"
+                 Grid.Row="0" Grid.Column="0"
+                 Width="1" Height="1" Opacity="0"
+                 IsTabStop="False" IsHitTestVisible="False"
+                 InputMethod.IsInputMethodEnabled="True"
+                 PreviewTextInput="PhoneKeyboardSink_PreviewTextInput"
+                 PreviewKeyDown="PhoneKeyboardSink_PreviewKeyDown"/>
 
         <Border Grid.Row="0" Grid.ColumnSpan="3"
                 Background="White" BorderBrush="#EDEDED" BorderThickness="0,0,0,1"/>
@@ -73,17 +113,29 @@
         <StackPanel x:Name="GlobalTabsHost" Grid.Row="0" Grid.Column="2"
                     Orientation="Horizontal" HorizontalAlignment="Left">
             <Grid Width="88" Height="58">
-                <TextBlock Text="单品监控" FontSize="13" FontWeight="SemiBold"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                <Border Height="2" Background="#FF2442" VerticalAlignment="Bottom" Margin="15,0"/>
+                <Button x:Name="SingleTabButton" Style="{StaticResource GlobalTabButtonStyle}"
+                        Click="SingleTabButton_Click">
+                    <TextBlock x:Name="SingleTabText" Text="单品监控" FontSize="13" FontWeight="SemiBold"
+                               Foreground="#1A1A1A"/>
+                </Button>
+                <Border x:Name="SingleTabIndicator" Height="2" Background="#FF2442"
+                        VerticalAlignment="Bottom" Margin="15,0" IsHitTestVisible="False"/>
             </Grid>
             <Grid Width="88" Height="58">
-                <TextBlock Text="店铺监控" FontSize="13" Foreground="#595959"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Button x:Name="ShopsTabButton" Style="{StaticResource GlobalTabButtonStyle}"
+                        Click="ShopsTabButton_Click">
+                    <TextBlock x:Name="ShopsTabText" Text="店铺监控" FontSize="13" Foreground="#595959"/>
+                </Button>
+                <Border x:Name="ShopsTabIndicator" Height="2" Background="#FF2442"
+                        VerticalAlignment="Bottom" Margin="15,0" Visibility="Collapsed" IsHitTestVisible="False"/>
             </Grid>
             <Grid Width="88" Height="58">
-                <TextBlock Text="选品中心" FontSize="13" Foreground="#595959"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Button x:Name="SelectionTabButton" Style="{StaticResource GlobalTabButtonStyle}"
+                        Click="SelectionTabButton_Click">
+                    <TextBlock x:Name="SelectionTabText" Text="选品中心" FontSize="13" Foreground="#595959"/>
+                </Button>
+                <Border x:Name="SelectionTabIndicator" Height="2" Background="#FF2442"
+                        VerticalAlignment="Bottom" Margin="15,0" Visibility="Collapsed" IsHitTestVisible="False"/>
             </Grid>
         </StackPanel>
 
@@ -146,12 +198,12 @@
                     </StackPanel>
                     <Button Grid.Column="1" x:Name="MonitorButton" Content="加入监控" Height="34"
                             Margin="0,0,8,0" Padding="14,0" VerticalAlignment="Center"
-                            BorderBrush="#DDDDDD" BorderThickness="1" Background="White"
+                            Style="{StaticResource ProductActionButtonStyle}"
                             IsEnabled="False" Click="MonitorButton_Click"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
                     <Button Grid.Column="2" x:Name="SelectionButton" Content="加入选品中心" Height="34"
                             Margin="0,0,14,0" Padding="14,0" VerticalAlignment="Center"
-                            BorderBrush="#FF2442" BorderThickness="1" Background="#FF2442" Foreground="White"
+                            Style="{StaticResource ProductActionButtonStyle}"
                             IsEnabled="False" Click="SelectionButton_Click"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
                 </Grid>

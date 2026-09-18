@@ -24,6 +24,7 @@ internal sealed class RuntimeCoordinator : IDisposable
     private bool _ownsPython;
     private bool _ownsScrcpy;
     private readonly SemaphoreSlim _scrcpyRecoveryLock = new(1, 1);
+    private readonly SemaphoreSlim _androidInputLock = new(1, 1);
     private DateTime _lastScrcpyRecoveryAttemptUtc;
 
     public async Task StartAsync(IntPtr phoneHost)
@@ -53,6 +54,34 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     public Task CopyCurrentProductLinkAsync() =>
         _androidUi?.CopyCurrentProductLinkAsync() ?? throw new InvalidOperationException("Android 尚未连接");
+
+    public async Task InjectTextAsync(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        await _androidInputLock.WaitAsync();
+        try
+        {
+            await RunAsync(_adb, "-s", Serial, "shell", "input", "text", text.Replace(" ", "%s"));
+        }
+        finally
+        {
+            _androidInputLock.Release();
+        }
+    }
+
+    public async Task InjectKeyEventAsync(string keyCode)
+    {
+        if (string.IsNullOrWhiteSpace(keyCode)) return;
+        await _androidInputLock.WaitAsync();
+        try
+        {
+            await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", keyCode);
+        }
+        finally
+        {
+            _androidInputLock.Release();
+        }
+    }
 
     public async Task<bool> EnsureHealthyAsync(bool phoneVisible)
     {
@@ -91,6 +120,15 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (_scrcpyWindow == IntPtr.Zero) return;
         if (visible) ResizePhoneToHost(throwOnFailure: false);
         NativeMethods.ShowWindow(_scrcpyWindow, visible ? NativeMethods.SwShow : NativeMethods.SwHide);
+    }
+
+    public bool ContainsPhoneScreenPoint(int x, int y)
+    {
+        if (_scrcpyWindow == IntPtr.Zero || !NativeMethods.IsWindow(_scrcpyWindow))
+            return false;
+        return NativeMethods.GetWindowRect(_scrcpyWindow, out var rect) &&
+               x >= rect.Left && x < rect.Right &&
+               y >= rect.Top && y < rect.Bottom;
     }
 
     private async Task EnsurePythonServiceAsync()
@@ -244,6 +282,7 @@ internal sealed class RuntimeCoordinator : IDisposable
             "--window-title", WindowTitle,
             "--window-borderless",
             "--no-audio",
+            "--keyboard=disabled",
             "--video-bit-rate", "20M",
             "--render-driver", "software",
             "--window-x", "-32000",
@@ -432,9 +471,29 @@ internal sealed class RuntimeCoordinator : IDisposable
 internal static class NativeMethods
 {
     internal const int GwlStyle = -16, SwHide = 0, SwShow = 5;
+    internal const int WhMouseLl = 14;
+    internal const int WmLButtonDown = 0x0201, WmRButtonDown = 0x0204, WmMButtonDown = 0x0207;
     internal const long WsChild = 0x40000000, WsPopup = 0x80000000, WsCaption = 0x00C00000, WsThickFrame = 0x00040000;
     internal const long WsClipChildren = 0x02000000, WsClipSiblings = 0x04000000;
     internal delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+    internal delegate IntPtr LowLevelMouseProc(int code, IntPtr message, IntPtr data);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Point
+    {
+        internal int X;
+        internal int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MsllHookStruct
+    {
+        internal Point Point;
+        internal uint MouseData;
+        internal uint Flags;
+        internal uint Time;
+        internal UIntPtr ExtraInfo;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Rect
@@ -446,6 +505,19 @@ internal static class NativeMethods
         internal int Width => Right - Left;
         internal int Height => Bottom - Top;
     }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr SetWindowsHookEx(int hookId, LowLevelMouseProc callback, IntPtr module, uint threadId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr GetModuleHandle(string? moduleName);
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern IntPtr SetParent(IntPtr child, IntPtr parent);
