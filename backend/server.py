@@ -1,13 +1,16 @@
 import argparse
+import json
 import logging
+from io import BytesIO
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import collector
 import db
+import exporter
 import jobs
 import metrics
 
@@ -122,6 +125,28 @@ def create_app(testing: bool = False) -> Flask:
     @app.get("/api/selection")
     def selection_products():
         return jsonify(db.list_selection_products())
+
+    @app.post("/api/export")
+    def export_data():
+        try:
+            if request.is_json:
+                body = request.get_json(silent=True) or {}
+            else:
+                raw = request.form.get("payload", "")
+                body = json.loads(raw) if raw else {}
+            module = str(body.get("module") or "").strip()
+            fmt = str(body.get("format") or "").strip().lower()
+            rows = body.get("rows")
+            data, mimetype, filename = exporter.build_export(module, fmt, rows)
+            return send_file(
+                BytesIO(data),
+                mimetype=mimetype,
+                as_attachment=True,
+                download_name=filename,
+                max_age=0,
+            )
+        except (ValueError, json.JSONDecodeError) as exc:
+            return _api_error(str(exc))
 
     @app.post("/api/products/collect")
     def collect():

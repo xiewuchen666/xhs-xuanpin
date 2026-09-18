@@ -24,6 +24,13 @@ const shopImportCancel = document.querySelector('#shopImportCancel');
 const shopImportSubmit = document.querySelector('#shopImportSubmit');
 const shopImportText = document.querySelector('#shopImportText');
 
+const exportOverlay = document.querySelector('#exportOverlay');
+const exportClose = document.querySelector('#exportClose');
+const exportCancel = document.querySelector('#exportCancel');
+const exportCsv = document.querySelector('#exportCsv');
+const exportXlsx = document.querySelector('#exportXlsx');
+const exportSummary = document.querySelector('#exportSummary');
+
 const settingsOverlay = document.querySelector('#settingsOverlay');
 const settingsClose = document.querySelector('#settingsClose');
 const settingsCancel = document.querySelector('#settingsCancel');
@@ -38,6 +45,8 @@ let activeActionContext = 'single';
 let allProducts = [];
 let allShops = [];
 let expandedShopKeys = new Set();
+let productPage = 1;
+let productPageSize = 30;
 let shopPage = 1;
 let shopPageSize = 30;
 
@@ -170,13 +179,14 @@ function productToolbar(products) {
       '<option value="rolling24_desc">近24h新增 ↓</option><option value="today_desc">今日新增 ↓</option>' +
       '<option value="sales_desc">累计销量 ↓</option><option value="updated_desc">最近更新 ↓</option>' +
     '</select><div class="grow"></div>' +
-    '<button class="btn" type="button" disabled title="导出将在后续阶段实现">⇩ 导出</button>' +
+    '<button class="btn" id="exportButton" type="button">⇩ 导出</button>' +
     '<button class="btn primary" id="collectPageButton" type="button">立即采集本页</button>' +
     '<button class="btn" id="settingsButton" type="button">设置</button>';
 
-  document.querySelector('#toolbarSearch').addEventListener('input', renderCurrentProductList);
-  document.querySelector('#shopFilter').addEventListener('change', renderCurrentProductList);
-  document.querySelector('#sortSelect').addEventListener('change', renderCurrentProductList);
+  document.querySelector('#toolbarSearch').addEventListener('input', () => { productPage = 1; renderCurrentProductList(); });
+  document.querySelector('#shopFilter').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
+  document.querySelector('#sortSelect').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
+  document.querySelector('#exportButton').addEventListener('click', openExportDialog);
   document.querySelector('#collectPageButton').addEventListener('click', collectVisibleProducts);
   document.querySelector('#settingsButton').addEventListener('click', openSettings);
 }
@@ -234,11 +244,13 @@ function productRow(product, context) {
       'data-more-shop="' + (inShop ? '1' : '0') + '" data-more-context="' + esc(context) + '">···</button></div></td></tr>';
 }
 
-function renderProductTable(products, context) {
+function renderProductTable(products, context, total) {
+  const pager = renderProductPager(total);
   if (!products.length) {
     content.innerHTML = '<div class="empty">' +
-      (context === 'selection' ? '选品中心还没有商品。' : '没有符合当前条件的商品。') +
-      '</div>';
+      (context === 'selection' ? '选品中心还没有符合当前条件的商品。' : '没有符合当前条件的商品。') +
+      '</div>' + pager;
+    bindProductPager();
     return;
   }
   content.innerHTML =
@@ -246,7 +258,9 @@ function renderProductTable(products, context) {
     '<th style="width:24%">商品 / 店铺</th><th style="width:7%">当前价</th><th style="width:9%">累计销量</th>' +
     '<th style="width:9%">今日新增</th><th style="width:9%">近24小时新增</th><th style="width:10%">最近区间新增</th>' +
     '<th style="width:12%">最近更新</th><th style="width:8%">状态</th><th style="width:6%">操作</th>' +
-    '</tr></thead><tbody>' + products.map(product => productRow(product, context)).join('') + '</tbody></table></div>';
+    '</tr></thead><tbody>' + products.map(product => productRow(product, context)).join('') + '</tbody></table></div>' +
+    pager;
+  bindProductPager();
 }
 
 function currentProductSource() {
@@ -257,8 +271,63 @@ function currentProductContext() {
   return view === 'selection' ? 'selection' : 'single';
 }
 
+function currentFilteredProducts() {
+  return filterAndSortProducts(currentProductSource());
+}
+
+function renderProductPager(total) {
+  const pages = Math.max(1, Math.ceil(total / productPageSize));
+  productPage = Math.min(productPage, pages);
+  const start = total ? (productPage - 1) * productPageSize + 1 : 0;
+  const end = Math.min(total, productPage * productPageSize);
+  return '<div class="pager">' +
+    '<span>每页</span><select class="selectbox pager-size" id="productPageSize">' +
+      [30,50,100].map(size => '<option value="' + size + '"' + (productPageSize === size ? ' selected' : '') + '>' + size + '</option>').join('') +
+    '</select><span>共 ' + total + ' 个 · ' + start + '-' + end + '</span><div class="grow"></div>' +
+    '<button class="btn" id="productPrev" type="button"' + (productPage <= 1 ? ' disabled' : '') + '>‹</button>' +
+    '<span class="page-current">' + productPage + ' / ' + pages + '</span>' +
+    '<button class="btn" id="productNext" type="button"' + (productPage >= pages ? ' disabled' : '') + '>›</button></div>';
+}
+
+function currentProductPageItems() {
+  const products = currentFilteredProducts();
+  const pages = Math.max(1, Math.ceil(products.length / productPageSize));
+  if (productPage > pages) productPage = pages;
+  const start = (productPage - 1) * productPageSize;
+  return products.slice(start, start + productPageSize);
+}
+
+function bindProductPager() {
+  document.querySelector('#productPageSize')?.addEventListener('change', event => {
+    productPageSize = Number(event.target.value) || 30;
+    productPage = 1;
+    renderCurrentProductList();
+  });
+  document.querySelector('#productPrev')?.addEventListener('click', () => {
+    if (productPage > 1) {
+      productPage -= 1;
+      renderCurrentProductList();
+    }
+  });
+  document.querySelector('#productNext')?.addEventListener('click', () => {
+    const pages = Math.max(1, Math.ceil(currentFilteredProducts().length / productPageSize));
+    if (productPage < pages) {
+      productPage += 1;
+      renderCurrentProductList();
+    }
+  });
+}
+
 function renderCurrentProductList() {
-  renderProductTable(filterAndSortProducts(currentProductSource()), currentProductContext());
+  const filtered = currentFilteredProducts();
+  const pages = Math.max(1, Math.ceil(filtered.length / productPageSize));
+  if (productPage > pages) productPage = pages;
+  const start = (productPage - 1) * productPageSize;
+  renderProductTable(
+    filtered.slice(start, start + productPageSize),
+    currentProductContext(),
+    filtered.length
+  );
 }
 
 async function loadSinglePage({keepNotice = false} = {}) {
@@ -304,13 +373,14 @@ function shopsToolbar() {
       '<option value="today_desc">今日新增 ↓</option><option value="rolling24_desc">近24h新增 ↓</option>' +
       '<option value="updated_desc">最近更新 ↓</option><option value="count_desc">监控商品数 ↓</option>' +
     '</select><div class="grow"></div>' +
-    '<button class="btn" type="button" disabled title="导出将在后续阶段实现">⇩ 导出</button>' +
+    '<button class="btn" id="exportButton" type="button">⇩ 导出</button>' +
     '<button class="btn" id="addShopProductButton" type="button">＋ 添加商品</button>' +
     '<button class="btn primary" id="collectShopPageButton" type="button">立即采集本页</button>' +
     '<button class="btn" id="settingsButton" type="button">设置</button>';
 
   document.querySelector('#toolbarSearch').addEventListener('input', () => { shopPage = 1; renderShopList(); });
   document.querySelector('#shopSort').addEventListener('change', () => { shopPage = 1; renderShopList(); });
+  document.querySelector('#exportButton').addEventListener('click', openExportDialog);
   document.querySelector('#addShopProductButton').addEventListener('click', openShopImport);
   document.querySelector('#collectShopPageButton').addEventListener('click', collectVisibleShopProducts);
   document.querySelector('#settingsButton').addEventListener('click', openSettings);
@@ -473,7 +543,7 @@ async function collectProducts(products, button, scope = 'all') {
 async function collectVisibleProducts() {
   const button = document.querySelector('#collectPageButton');
   await collectProducts(
-    filterAndSortProducts(allProducts),
+    currentProductPageItems(),
     button,
     view === 'selection' ? 'selection' : 'single'
   );
@@ -484,6 +554,164 @@ async function collectVisibleShopProducts() {
   const productsById = new Map();
   currentShopPageItems().forEach(shop => (shop.products || []).forEach(product => productsById.set(product.id, product)));
   await collectProducts([...productsById.values()], button, 'shop');
+}
+
+function exportMetric(metric) {
+  return metric?.value == null ? null : Number(metric.value);
+}
+
+function roundedIntervalHours(metric) {
+  const hours = Number(metric?.hours);
+  if (!Number.isFinite(hours) || hours < 0) return null;
+  return Math.round(hours * 10) / 10;
+}
+
+function productExportRow(product) {
+  return {
+    title: product.title || '',
+    shop_name: product.shop_name || '',
+    url: product.url || '',
+    price: product.price == null ? null : Number(product.price),
+    total_sales: product.total_sales == null ? null : Number(product.total_sales),
+    today: exportMetric(product.today),
+    rolling24: exportMetric(product.rolling24),
+    increment: exportMetric(product.increment),
+    interval_hours: roundedIntervalHours(product.increment),
+    updated_at: product.last_collected_at || '',
+    status: product.monitor_state === 'paused' ? '已暂停' : (product.health_label || '正常')
+  };
+}
+
+function shopExportRows(shops) {
+  const rows = [];
+  shops.forEach(shop => {
+    const products = shop.products || [];
+    const shopBase = {
+      shop_name: shop.shop_name || '',
+      shop_id: shop.shop_id || '',
+      rating: shop.rating ?? '',
+      brand_name: shop.brand_name || '',
+      brand_fans_count: shop.brand_fans_count == null ? null : Number(shop.brand_fans_count),
+      brand_notes_count: shop.brand_notes_count == null ? null : Number(shop.brand_notes_count),
+      product_count: Number(shop.product_count || 0),
+      shop_today: exportMetric(shop.today),
+      shop_today_coverage: Number(shop.today?.covered || 0) + '/' + Number(shop.today?.total || 0),
+      shop_rolling24: exportMetric(shop.rolling24),
+      shop_rolling24_coverage: Number(shop.rolling24?.covered || 0) + '/' + Number(shop.rolling24?.total || 0)
+    };
+    if (!products.length) {
+      rows.push(shopBase);
+      return;
+    }
+    products.forEach(product => {
+      rows.push({
+        ...shopBase,
+        product_title: product.title || '',
+        product_url: product.url || '',
+        price: product.price == null ? null : Number(product.price),
+        total_sales: product.total_sales == null ? null : Number(product.total_sales),
+        today: exportMetric(product.today),
+        rolling24: exportMetric(product.rolling24),
+        increment: exportMetric(product.increment),
+        interval_hours: roundedIntervalHours(product.increment),
+        updated_at: product.last_collected_at || '',
+        product_status: product.monitor_state === 'paused' ? '已暂停' : (product.health_label || '正常')
+      });
+    });
+  });
+  return rows;
+}
+
+function currentExportPayload() {
+  if (view === 'shops') {
+    const shops = filteredSortedShops();
+    const rows = shopExportRows(shops);
+    return {
+      module:'shops',
+      rows,
+      summary:shops.length + ' 家店铺 · ' + rows.length + ' 条商品明细'
+    };
+  }
+  const products = currentFilteredProducts();
+  return {
+    module:view === 'selection' ? 'selection' : 'single',
+    rows:products.map(productExportRow),
+    summary:products.length + ' 个商品'
+  };
+}
+
+function closeExportDialog() {
+  exportOverlay.hidden = true;
+}
+
+function openExportDialog() {
+  const payload = currentExportPayload();
+  exportSummary.textContent = '当前筛选结果：' + payload.summary + '。导出将包含全部筛选结果，不受当前页限制。';
+  const empty = payload.rows.length === 0;
+  exportCsv.disabled = empty;
+  exportXlsx.disabled = empty;
+  exportOverlay.hidden = false;
+  exportClose.focus();
+}
+
+function submitExport(format) {
+  const payload = currentExportPayload();
+  if (!payload.rows.length) {
+    showNotice('当前筛选结果为空，没有可导出的数据。', 'error');
+    closeExportDialog();
+    return;
+  }
+
+  exportCsv.disabled = true;
+  exportXlsx.disabled = true;
+
+  if (window.chrome?.webview?.postMessage) {
+    window.chrome.webview.postMessage({
+      type:'export',
+      module:payload.module,
+      format,
+      rows:payload.rows
+    });
+    closeExportDialog();
+    showNotice('请选择保存位置，保存后会自动生成导出文件。', 'success');
+    setTimeout(() => {
+      exportCsv.disabled = false;
+      exportXlsx.disabled = false;
+    }, 500);
+    return;
+  }
+
+  let frame = document.querySelector('#exportDownloadFrame');
+  if (!frame) {
+    frame = document.createElement('iframe');
+    frame.id = 'exportDownloadFrame';
+    frame.name = 'exportDownloadFrame';
+    frame.hidden = true;
+    document.body.appendChild(frame);
+  }
+
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '/api/export';
+  form.target = 'exportDownloadFrame';
+  form.acceptCharset = 'UTF-8';
+  form.hidden = true;
+
+  const input = document.createElement('input');
+  input.type = 'hidden';
+  input.name = 'payload';
+  input.value = JSON.stringify({module:payload.module, format, rows:payload.rows});
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
+
+  closeExportDialog();
+  showNotice('正在生成 ' + format.toUpperCase() + ' 导出文件，请选择保存位置。', 'success');
+  setTimeout(() => {
+    exportCsv.disabled = false;
+    exportXlsx.disabled = false;
+  }, 500);
 }
 
 function closeShopImport() {
@@ -590,7 +818,7 @@ async function saveSettings() {
 }
 
 async function refreshCurrentViewData() {
-  if (!actionOverlay.hidden || !settingsOverlay.hidden || !shopImportOverlay.hidden) return;
+  if (!actionOverlay.hidden || !settingsOverlay.hidden || !shopImportOverlay.hidden || !exportOverlay.hidden) return;
   if (view === 'single') {
     allProducts = await api('/api/products');
     productHeader(allProducts, false);
@@ -760,6 +988,29 @@ shopImportClose.addEventListener('click', closeShopImport);
 shopImportCancel.addEventListener('click', closeShopImport);
 shopImportSubmit.addEventListener('click', submitShopImport);
 
+exportOverlay.addEventListener('click', event => {
+  if (event.target === exportOverlay) closeExportDialog();
+});
+exportClose.addEventListener('click', closeExportDialog);
+exportCancel.addEventListener('click', closeExportDialog);
+exportCsv.addEventListener('click', () => submitExport('csv'));
+exportXlsx.addEventListener('click', () => submitExport('xlsx'));
+
+if (window.chrome?.webview?.addEventListener) {
+  window.chrome.webview.addEventListener('message', event => {
+    const message = event.data;
+    if (!message || message.type !== 'export-result') return;
+    if (message.cancelled) {
+      showNotice(message.message || '已取消导出。');
+    } else {
+      showNotice(
+        message.message || (message.ok ? '导出完成。' : '导出失败。'),
+        message.ok ? 'success' : 'error'
+      );
+    }
+  });
+}
+
 settingsOverlay.addEventListener('click', event => {
   if (event.target === settingsOverlay) closeSettings();
 });
@@ -769,7 +1020,8 @@ settingsSave.addEventListener('click', saveSettings);
 
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
-  if (!shopImportOverlay.hidden) closeShopImport();
+  if (!exportOverlay.hidden) closeExportDialog();
+  else if (!shopImportOverlay.hidden) closeShopImport();
   else if (!settingsOverlay.hidden) closeSettings();
   else if (!actionOverlay.hidden) closeActionPanel();
 });

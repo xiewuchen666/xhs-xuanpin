@@ -18,6 +18,7 @@
     .action-overlay{position:fixed;inset:0;background:rgba(0,0,0,.30);display:flex;align-items:center;justify-content:center;padding:24px;z-index:1000}.action-overlay[hidden]{display:none}.action-panel{width:min(448px,calc(100vw - 48px));background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.12);padding:18px}.action-panel-head{display:flex;align-items:flex-start;gap:12px}.action-panel-copy{min-width:0;flex:1}.action-panel-copy h2{margin:0;font-size:16px;font-weight:500;line-height:1.45}.action-panel-copy p{margin:5px 0 0;color:var(--ink3);font-size:12px;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.action-close{width:28px;height:28px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ink3);cursor:pointer;font-size:18px}.action-close:hover{background:#F5F5F5;border-color:var(--line)}.action-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.action-tile{min-height:72px;border:1px solid var(--line);border-radius:8px;background:#fff;text-align:left;padding:11px 12px;cursor:pointer;display:flex;align-items:center;gap:10px}.action-tile:hover:not(:disabled){border-color:var(--line2);background:#FAFAFA}.action-tile:disabled{opacity:.45;cursor:not-allowed}.action-tile[hidden]{display:none}.action-icon{width:32px;height:32px;border-radius:8px;background:var(--soft);display:grid;place-items:center;font-size:15px;flex:none}.action-tile.primary .action-icon{background:var(--red-soft);color:var(--red)}.action-tile.danger .action-icon{background:#FFF2F2;color:var(--danger)}.action-tile strong,.action-tile small{display:block}.action-tile strong{font-size:13px;font-weight:500;line-height:1.35}.action-tile small{font-size:12px;color:var(--ink3);margin-top:3px;line-height:1.4}
     .settings-panel{width:min(430px,calc(100vw - 48px));background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.12);padding:18px}.settings-form{margin-top:16px;display:grid;gap:12px}.settings-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:11px 0;border-bottom:1px solid var(--line)}.settings-row:last-of-type{border-bottom:0}.settings-copy strong,.settings-copy small{display:block}.settings-copy strong{font-size:13px;font-weight:500}.settings-copy small{font-size:12px;color:var(--ink3);margin-top:3px;line-height:1.4}.settings-number{width:110px;height:34px;border:1px solid var(--line2);border-radius:7px;padding:0 9px;text-align:right}.settings-check{width:17px;height:17px}.settings-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}.settings-runtime{margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--soft);color:var(--ink3);font-size:12px;line-height:1.5}
     .import-panel{width:min(560px,calc(100vw - 48px));background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.12);padding:18px}.import-text{width:100%;height:150px;resize:vertical;border:1px solid var(--line2);border-radius:8px;padding:10px 12px;outline:0;line-height:1.6;font-size:13px}.import-text:focus{border-color:#BDBDBD}.import-hint{margin-top:8px;color:var(--ink3);font-size:12px;line-height:1.5}.shop-meta-line{margin-top:4px;color:var(--ink3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .export-panel{width:min(430px,calc(100vw - 48px));background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.12);padding:18px}.export-summary{margin-top:14px;padding:10px 12px;border-radius:8px;background:var(--soft);color:var(--ink2);font-size:12px;line-height:1.5}.export-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.export-format{min-height:58px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;text-align:left;padding:10px 12px}.export-format:hover{background:#FAFAFA;border-color:var(--line2)}.export-format strong,.export-format small{display:block}.export-format strong{font-size:13px;font-weight:500}.export-format small{font-size:12px;color:var(--ink3);margin-top:4px}
     @media(max-width:1200px){.head{padding-left:16px;padding-right:16px}.toolbar{padding-left:16px;padding-right:16px}.searchbox{width:220px}.tablewrap,.shoplist{padding-left:16px;padding-right:16px}.notice{margin-left:16px;margin-right:16px}}
   </style>
 </head>
@@ -68,6 +69,23 @@
           <button class="btn" id="shopImportCancel" type="button">取消</button>
           <button class="btn primary" id="shopImportSubmit" type="button">提交添加</button>
         </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="action-overlay" id="exportOverlay" hidden>
+    <section class="export-panel" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+      <div class="action-panel-head">
+        <div class="action-panel-copy"><h2 id="exportTitle">导出当前筛选结果</h2><p>导出的不是当前页，而是当前搜索、筛选和排序条件下的全部结果。</p></div>
+        <button class="action-close" id="exportClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="export-summary" id="exportSummary">正在统计可导出数据…</div>
+      <div class="export-actions">
+        <button class="export-format" id="exportXlsx" type="button"><strong>Excel（.xlsx）</strong><small>适合继续筛选、排序和编辑</small></button>
+        <button class="export-format" id="exportCsv" type="button"><strong>CSV（.csv）</strong><small>UTF-8 BOM，兼容中文 Excel</small></button>
+      </div>
+      <div class="settings-actions">
+        <button class="btn" id="exportCancel" type="button">取消</button>
       </div>
     </section>
   </div>

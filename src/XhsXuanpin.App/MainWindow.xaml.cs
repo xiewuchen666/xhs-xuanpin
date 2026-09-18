@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls.Primitives;
@@ -87,6 +89,8 @@ public partial class MainWindow : Window
             InstallPhoneMouseHook();
             await Workspace.EnsureCoreWebView2Async();
             Workspace.CoreWebView2.NewWindowRequested += Workspace_NewWindowRequested;
+            Workspace.CoreWebView2.DownloadStarting += Workspace_DownloadStarting;
+            Workspace.CoreWebView2.WebMessageReceived += Workspace_WebMessageReceived;
             NavigateWorkspace("single");
             FitPhoneSurface();
             _runtimeReady = true;
@@ -255,6 +259,128 @@ public partial class MainWindow : Window
         {
             UseShellExecute = true
         });
+    }
+
+    private void Workspace_DownloadStarting(
+        object? sender,
+        Microsoft.Web.WebView2.Core.CoreWebView2DownloadStartingEventArgs e)
+    {
+        var suggestedName = System.IO.Path.GetFileName(e.ResultFilePath);
+        if (string.IsNullOrWhiteSpace(suggestedName))
+            suggestedName = "小红书选品导出.xlsx";
+
+        var extension = System.IO.Path.GetExtension(suggestedName).ToLowerInvariant();
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = suggestedName,
+            AddExtension = true,
+            DefaultExt = extension,
+            Filter = extension switch
+            {
+                ".csv" => "CSV 文件 (*.csv)|*.csv|所有文件 (*.*)|*.*",
+                ".xlsx" => "Excel 工作簿 (*.xlsx)|*.xlsx|所有文件 (*.*)|*.*",
+                _ => "所有文件 (*.*)|*.*"
+            }
+        };
+
+        e.Handled = true;
+        if (dialog.ShowDialog(this) == true)
+        {
+            e.ResultFilePath = dialog.FileName;
+            return;
+        }
+
+        e.Cancel = true;
+    }
+
+    private async void Workspace_WebMessageReceived(
+        object? sender,
+        Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        WorkspaceMessage? message;
+        try
+        {
+            message = JsonSerializer.Deserialize<WorkspaceMessage>(e.WebMessageAsJson);
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        if (message?.type != "export")
+            return;
+
+        var format = (message.format ?? "").Trim().ToLowerInvariant();
+        var module = (message.module ?? "").Trim();
+        if (format is not ("csv" or "xlsx") ||
+            module is not ("single" or "selection" or "shops"))
+        {
+            PostWorkspaceExportResult(false, "导出参数无效。");
+            return;
+        }
+
+        var label = module switch
+        {
+            "shops" => "店铺监控",
+            "selection" => "选品中心",
+            _ => "单品监控"
+        };
+        var extension = "." + format;
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = $"{label}-{DateTime.Now:yyyyMMdd-HHmmss}{extension}",
+            AddExtension = true,
+            DefaultExt = extension,
+            Filter = format == "csv"
+                ? "CSV 文件 (*.csv)|*.csv|所有文件 (*.*)|*.*"
+                : "Excel 工作簿 (*.xlsx)|*.xlsx|所有文件 (*.*)|*.*"
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            PostWorkspaceExportResult(false, "已取消导出。", cancelled: true);
+            return;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(new
+            {
+                module,
+                format,
+                rows = message.rows
+            });
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var response = await Http.PostAsync("/api/export", content);
+            if (!response.IsSuccessStatusCode)
+            {
+                var detail = await response.Content.ReadAsStringAsync();
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(detail) ? $"HTTP {(int)response.StatusCode}" : detail);
+            }
+
+            var bytes = await response.Content.ReadAsByteArrayAsync();
+            await System.IO.File.WriteAllBytesAsync(dialog.FileName, bytes);
+            PostWorkspaceExportResult(true, $"已导出到：{dialog.FileName}");
+        }
+        catch (Exception ex)
+        {
+            PostWorkspaceExportResult(false, $"导出失败：{ex.Message}");
+        }
+    }
+
+    private void PostWorkspaceExportResult(bool ok, string message, bool cancelled = false)
+    {
+        if (Workspace.CoreWebView2 is null)
+            return;
+        var payload = JsonSerializer.Serialize(new
+        {
+            type = "export-result",
+            ok,
+            cancelled,
+            message
+        });
+        Workspace.CoreWebView2.PostWebMessageAsJson(payload);
     }
 
     private void FitPhoneSurface()
@@ -590,6 +716,7 @@ public partial class MainWindow : Window
         host.Equals("xiaohongshu.com", StringComparison.OrdinalIgnoreCase) ||
         host.EndsWith(".xiaohongshu.com", StringComparison.OrdinalIgnoreCase);
 
+    private sealed record WorkspaceMessage(string? type, string? module, string? format, JsonElement rows);
     private sealed record CollectResponse(bool ok, int product_id, string? error);
     private sealed record ActionResponse(bool ok, string? error);
     private sealed record ScheduledJobResponse(string id, string? next_run_time);
