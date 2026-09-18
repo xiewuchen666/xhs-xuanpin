@@ -49,30 +49,114 @@ def exact_counter(row: Optional[Dict[str, Any]]) -> bool:
     return bool(row and row.get("sales_precision") == "exact" and row.get("total_sales") is not None and row.get("_time"))
 
 
+def resolve_counter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Classify exact counter readings without rewriting raw snapshots.
+
+    A single reading below the last confirmed baseline is held as a pending
+    rollback. If a later exact reading recovers to or above the baseline, the
+    pending reading is ignored for delta calculations. If the next exact
+    reading is still below the old baseline, the second low reading becomes a
+    new baseline segment.
+    """
+    resolved = [dict(row) for row in rows]
+    stable: Optional[Dict[str, Any]] = None
+    pending: Optional[Dict[str, Any]] = None
+    segment = 0
+
+    for row in resolved:
+        if not exact_counter(row):
+            continue
+        value = int(row["total_sales"])
+        if stable is None:
+            row["_counter_state"] = "stable"
+            row["_counter_segment"] = segment
+            stable = row
+            continue
+
+        baseline = int(stable["total_sales"])
+        if value >= baseline:
+            if pending is not None:
+                pending["_counter_state"] = "ignored_drop"
+                pending["_counter_segment"] = segment
+                pending = None
+            row["_counter_state"] = "stable"
+            row["_counter_segment"] = segment
+            stable = row
+            continue
+
+        if pending is None:
+            row["_counter_state"] = "pending_drop"
+            row["_counter_segment"] = segment
+            pending = row
+            continue
+
+        # Two consecutive exact readings remain below the last confirmed
+        # baseline: confirm a reset, but start the new segment at the second
+        # low reading so the first low never becomes a false growth baseline.
+        pending["_counter_state"] = "reset_evidence"
+        pending["_counter_segment"] = segment
+        segment += 1
+        row["_counter_state"] = "reset_baseline"
+        row["_counter_segment"] = segment
+        stable = row
+        pending = None
+
+    return resolved
+
+
+def effective_counter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if row.get("_counter_state") in {"stable", "reset_baseline"}
+    ]
+
+
 def interval(start: Optional[Dict[str, Any]], end: Optional[Dict[str, Any]], rows: List[Dict[str, Any]], approximate: bool = False) -> Dict[str, Any]:
     if not start or not end:
         return missing("缺少区间端点采样")
     if not exact_counter(start) or not exact_counter(end):
         return missing("端点包含近似、下限或未知销量，不能计算新增")
+
+    start_state = start.get("_counter_state")
+    end_state = end.get("_counter_state")
+    if start_state == "pending_drop" or end_state == "pending_drop":
+        return missing("销量回落待确认；暂不参与新增计算", "anomaly")
+    if start_state not in {"stable", "reset_baseline"} or end_state not in {"stable", "reset_baseline"}:
+        return missing("端点处于销量回落确认过程中，不能计算新增", "anomaly")
+    if start.get("_counter_segment") != end.get("_counter_segment"):
+        return missing("区间内发生销量基线重置；不能跨重置点计算新增")
+
     a, b = start["_time"], end["_time"]
     if b < a:
         return missing("采样时间顺序异常", "anomaly")
     if a == b and start.get("id") != end.get("id"):
         return missing("同秒多条记录，无法确定有效区间", "anomaly")
-    # Reject a window containing a counter decrease, even if its final delta is positive.
+
     ordered = [r for r in rows if r.get("_time") and a <= r["_time"] <= b]
-    previous = None
     for row in ordered:
         if not exact_counter(row):
             return missing("区间内存在不确定读数，无法核实计数连续性")
-        if previous is not None and int(row["total_sales"]) < int(previous["total_sales"]):
-            return missing("区间内累计值回退；原因待核实", "anomaly")
-        previous = row
+        state = row.get("_counter_state")
+        if state == "pending_drop":
+            return missing("销量回落待确认；暂不参与新增计算", "anomaly")
+        if state in {"ignored_drop", "reset_evidence"}:
+            continue
+        if state == "reset_baseline" and row.get("_counter_segment") != start.get("_counter_segment"):
+            return missing("区间内发生销量基线重置；不能跨重置点计算新增")
+
     delta = int(end["total_sales"]) - int(start["total_sales"])
     if delta < 0:
-        return missing("累计值回退；原因待核实", "anomaly")
+        return missing("累计值回退待确认；暂不计算新增", "anomaly")
     hours = (b - a).total_seconds() / 3600
-    return {"value": delta, "quality": "approximate" if approximate else "exact", "reason": "边界附近采样，不代表精确日界/整点" if approximate else "两个精确读数之差", "from_time": text_time(a), "to_time": text_time(b), "hours": hours}
+    return {
+        "value": delta,
+        "quality": "approximate" if approximate else "exact",
+        "reason": "边界附近采样，不代表精确日界/整点" if approximate else "已确认基线之间的精确读数之差",
+        "from_time": text_time(a),
+        "to_time": text_time(b),
+        "hours": hours,
+    }
 
 
 def nearest(rows: List[Dict[str, Any]], target: datetime, tolerance_minutes: int, upper: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
@@ -80,28 +164,80 @@ def nearest(rows: List[Dict[str, Any]], target: datetime, tolerance_minutes: int
     return min(candidates, key=lambda r: (abs((r["_time"] - target).total_seconds()), r["_time"], r.get("id", 0))) if candidates else None
 
 
-def boundary_metric(rows: List[Dict[str, Any]], target: datetime, end: Optional[Dict[str, Any]], tolerance: int) -> Dict[str, Any]:
-    base = nearest(rows, target, tolerance, end["_time"] if end else None)
+def boundary_metric(
+    rows: List[Dict[str, Any]],
+    effective: List[Dict[str, Any]],
+    target: datetime,
+    end: Optional[Dict[str, Any]],
+    tolerance: int,
+) -> Dict[str, Any]:
+    base = nearest(effective, target, tolerance, end["_time"] if end else None)
     if not base:
-        return missing("缺少日界附近的精确采样（容差 %s 分钟）" % tolerance)
+        return missing("缺少日界附近的已确认采样（容差 %s 分钟）" % tolerance)
     if not end or end["_time"] < target:
         return missing("今日尚无有效采样")
     return interval(base, end, rows, base["_time"] != target)
 
 
-def window_metric(rows: List[Dict[str, Any]], start: datetime, end: datetime, tolerance: int, as_of: datetime) -> Dict[str, Any]:
-    left = nearest(rows, start, tolerance, as_of)
-    right = nearest(rows, end, tolerance, as_of)
+def window_metric(
+    rows: List[Dict[str, Any]],
+    effective: List[Dict[str, Any]],
+    start: datetime,
+    end: datetime,
+    tolerance: int,
+    as_of: datetime,
+) -> Dict[str, Any]:
+    left = nearest(effective, start, tolerance, as_of)
+    right = nearest(effective, end, tolerance, as_of)
     if not left or not right:
         return missing("缺少统一窗口端点（容差 %s 分钟）；不使用旧数据冒充" % tolerance)
     return interval(left, right, rows, left["_time"] != start or right["_time"] != end)
+
+
+def recent_increment(
+    rows: List[Dict[str, Any]],
+    effective: List[Dict[str, Any]],
+    latest: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not latest:
+        return missing("至少需要两次采样")
+    if not exact_counter(latest):
+        return missing("本次销量不可用于精确差分；不沿用历史增量")
+
+    state = latest.get("_counter_state")
+    if state == "pending_drop":
+        return missing("销量回落待确认；等待下一次采样确认", "anomaly")
+    if state == "reset_baseline":
+        return missing("销量基线已重置；等待下一次有效采样")
+    if state != "stable":
+        return missing("当前采样不能作为新增计算端点", "anomaly")
+
+    segment = latest.get("_counter_segment")
+    previous = next(
+        (
+            row
+            for row in reversed(effective)
+            if row is not latest
+            and row.get("_counter_segment") == segment
+            and row["_time"] <= latest["_time"]
+        ),
+        None,
+    )
+    if not previous:
+        return missing("当前基线段至少需要两次有效采样")
+    return interval(previous, latest, rows)
 
 
 def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Optional[datetime] = None, day_tolerance: int = 5, window_tolerance: int = 30, stale_minutes: int = 120) -> Dict[str, Any]:
     p = dict(product)
     current = timestamp(as_of) or now()
     rows = [normalized_snapshot(r) for r in snapshots]
-    rows = sorted([r for r in rows if r["_time"] and r["_time"] <= current], key=lambda r: (r["_time"], r.get("id", 0)))
+    rows = sorted(
+        [r for r in rows if r["_time"] and r["_time"] <= current],
+        key=lambda r: (r["_time"], r.get("id", 0)),
+    )
+    rows = resolve_counter_rows(rows)
+    effective = effective_counter_rows(rows)
     latest = rows[-1] if rows else None
     valid_sales = [r for r in rows if r.get("total_sales") is not None and r.get("sales_precision") in {"exact", "lower_bound", "approximate"}]
     last_sales = valid_sales[-1] if valid_sales else None
@@ -120,15 +256,48 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     p["stale"] = age is None or age > stale_minutes
     p["age_minutes"] = round(age) if age is not None else None
     midnight = datetime.combine(current.date(), datetime.min.time(), tzinfo=TZ)
-    today = boundary_metric(rows, midnight, latest, day_tolerance)
-    y_start = nearest(rows, midnight - timedelta(days=1), day_tolerance, current)
-    y_end = nearest(rows, midnight, day_tolerance, current)
-    yesterday = interval(y_start, y_end, rows, bool(y_start and y_end and (y_start["_time"] != midnight-timedelta(days=1) or y_end["_time"] != midnight))) if y_start and y_end else missing("缺少昨日或今日日界附近的精确采样")
-    increment = interval(rows[-2], latest, rows[-2:]) if len(rows) >= 2 else missing("至少需要两次采样")
-    if latest and not exact_counter(latest):
-        increment = missing("本次销量不可用于精确差分；不沿用历史增量")
-    rolling = window_metric(rows, current-timedelta(hours=24), current, window_tolerance, current)
-    prior = window_metric(rows, current-timedelta(hours=48), current-timedelta(hours=24), window_tolerance, current)
+    today = boundary_metric(rows, effective, midnight, latest, day_tolerance)
+    y_start = nearest(effective, midnight - timedelta(days=1), day_tolerance, current)
+    y_end = nearest(effective, midnight, day_tolerance, current)
+    yesterday = (
+        interval(
+            y_start,
+            y_end,
+            rows,
+            bool(
+                y_start
+                and y_end
+                and (
+                    y_start["_time"] != midnight - timedelta(days=1)
+                    or y_end["_time"] != midnight
+                )
+            ),
+        )
+        if y_start and y_end
+        else missing("缺少昨日或今日日界附近的已确认采样")
+    )
+    increment = recent_increment(rows, effective, latest)
+    rolling = window_metric(
+        rows,
+        effective,
+        current - timedelta(hours=24),
+        current,
+        window_tolerance,
+        current,
+    )
+    prior = window_metric(
+        rows,
+        effective,
+        current - timedelta(hours=48),
+        current - timedelta(hours=24),
+        window_tolerance,
+        current,
+    )
+
+    latest_counter_state = latest.get("_counter_state") if latest else None
+    if latest_counter_state == "pending_drop":
+        today = missing("销量回落待确认；等待下一次采样确认", "anomaly")
+        rolling = missing("销量回落待确认；等待下一次采样确认", "anomaly")
     growth = None
     growth_reason = "需要连续两个有效的 24 小时窗口"
     if rolling["value"] is not None and prior["value"] is not None:
@@ -145,6 +314,7 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     p["latest_increment"], p["previous_collected_at"] = increment["value"], increment["from_time"]
     p["velocity"] = round(increment["value"] / increment["hours"], 2) if increment["value"] is not None and increment["hours"] and increment["hours"] >= 5/60 else None
     p["velocity_reason"] = "实际采样区间的平均新增/小时，不是实时速度或预测" if p["velocity"] is not None else "区间不足 5 分钟或缺少有效读数"
+    p["counter_state"] = latest_counter_state or "unknown"
     p["anomaly"] = any(m["quality"] == "anomaly" for m in (today, yesterday, increment, rolling, prior))
     failed = p.get("last_attempt_status") == "failed" or (p.get("last_status") not in (None, "", "正常") and not p.get("last_attempt_status"))
     if p.get("monitor_state") == "archived":
@@ -153,8 +323,12 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
         p["health"], p["health_label"] = "muted", "已暂停"
     elif failed:
         p["health"], p["health_label"] = "danger", "最近采集失败"
+    elif latest_counter_state == "pending_drop":
+        p["health"], p["health_label"] = "warning", "销量回落待确认"
+    elif latest_counter_state == "reset_baseline":
+        p["health"], p["health_label"] = "warning", "销量基线已重置"
     elif p["anomaly"]:
-        p["health"], p["health_label"] = "danger", "累计值回退"
+        p["health"], p["health_label"] = "danger", "计数区间异常"
     elif p["sales_not_updated"]:
         p["health"], p["health_label"] = "warning", "本次销量缺失"
     elif p["stale"]:
@@ -170,8 +344,44 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
 def chart_rows(snapshots: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows = [normalized_snapshot(r) for r in snapshots]
     rows = sorted([r for r in rows if r["_time"]], key=lambda r: (r["_time"], r.get("id", 0)))
+    rows = resolve_counter_rows(rows)
+    effective = effective_counter_rows(rows)
     result = []
-    for i, row in enumerate(rows):
-        diff = interval(rows[i-1], row, rows[i-1:i+1]) if i else missing("首个采样")
-        result.append({"time": row["collected_at"], "epoch": int(row["_time"].timestamp()*1000), "value": row.get("total_sales"), "precision": row.get("sales_precision"), "raw": row.get("sales_raw", ""), "price": row.get("price"), "delta": diff["value"], "reason": diff["reason"], "from_time": diff["from_time"], "hours": diff["hours"], "anomaly": diff["quality"] == "anomaly", "midnight": bool(row.get("is_midnight"))})
+    for row in rows:
+        state = row.get("_counter_state")
+        if state == "pending_drop":
+            diff = missing("销量回落待确认；等待下一次采样确认", "anomaly")
+        elif state in {"ignored_drop", "reset_evidence"}:
+            diff = missing("销量回落采样已排除，不参与新增计算", "anomaly")
+        elif state == "reset_baseline":
+            diff = missing("销量基线已重置；从此采样重新开始")
+        elif state == "stable":
+            previous = next(
+                (
+                    candidate
+                    for candidate in reversed(effective)
+                    if candidate is not row
+                    and candidate.get("_counter_segment") == row.get("_counter_segment")
+                    and candidate["_time"] <= row["_time"]
+                ),
+                None,
+            )
+            diff = interval(previous, row, rows) if previous else missing("首个采样")
+        else:
+            diff = missing("该采样不能用于精确新增计算")
+        result.append({
+            "time": row["collected_at"],
+            "epoch": int(row["_time"].timestamp() * 1000),
+            "value": row.get("total_sales"),
+            "precision": row.get("sales_precision"),
+            "raw": row.get("sales_raw", ""),
+            "price": row.get("price"),
+            "delta": diff["value"],
+            "reason": diff["reason"],
+            "from_time": diff["from_time"],
+            "hours": diff["hours"],
+            "anomaly": diff["quality"] == "anomaly",
+            "counter_state": state or "unknown",
+            "midnight": bool(row.get("is_midnight")),
+        })
     return result

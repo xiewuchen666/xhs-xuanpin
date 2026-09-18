@@ -4,11 +4,10 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
-from unittest import mock
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import db
+import jobs
 import metrics
 import server
 
@@ -61,6 +60,59 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertIsNone(result["rolling24"]["value"])
         self.assertIsNone(result["increment"]["value"])
         self.assertEqual(result["health_label"], "下限值")
+
+    def test_single_counter_drop_is_ignored_after_recovery(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-19 00:35:05"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-18 00:35:05", "total_sales": 8000, "sales_raw": "已售8000", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-18 23:55:13", "total_sales": 8707, "sales_raw": "已售8707", "sales_precision": "exact", "price": 10},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-19 00:00:10", "total_sales": 8573, "sales_raw": "已售8573", "sales_precision": "exact", "price": 10},
+            {"id": 4, "product_id": 1, "collected_at": "2026-09-19 00:35:05", "total_sales": 8711, "sales_raw": "已售8711", "sales_precision": "exact", "price": 10},
+        ]
+        result = metrics.enrich(product, snapshots, as_of="2026-09-19 00:35:05")
+        self.assertEqual(result["today"]["value"], 4)
+        self.assertEqual(result["rolling24"]["value"], 711)
+        self.assertEqual(result["increment"]["value"], 4)
+        self.assertAlmostEqual(result["increment"]["hours"], 2392 / 3600, places=6)
+        self.assertEqual(result["counter_state"], "stable")
+        self.assertEqual(result["health_label"], "数据已更新")
+
+    def test_first_counter_drop_waits_for_confirmation(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-19 00:00:10"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-18 23:55:13", "total_sales": 8707, "sales_raw": "已售8707", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-19 00:00:10", "total_sales": 8573, "sales_raw": "已售8573", "sales_precision": "exact", "price": 10},
+        ]
+        result = metrics.enrich(product, snapshots, as_of="2026-09-19 00:00:10")
+        self.assertIsNone(result["today"]["value"])
+        self.assertIsNone(result["increment"]["value"])
+        self.assertEqual(result["counter_state"], "pending_drop")
+        self.assertEqual(result["health_label"], "销量回落待确认")
+        self.assertIn("回落待确认", result["increment"]["reason"])
+
+    def test_two_low_readings_reset_baseline_and_restart_increment(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-19 00:35:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-18 23:55:00", "total_sales": 8707, "sales_raw": "已售8707", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-19 00:00:00", "total_sales": 8573, "sales_raw": "已售8573", "sales_precision": "exact", "price": 10},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-19 00:35:00", "total_sales": 8580, "sales_raw": "已售8580", "sales_precision": "exact", "price": 10},
+        ]
+        reset = metrics.enrich(product, snapshots, as_of="2026-09-19 00:35:00")
+        self.assertIsNone(reset["today"]["value"])
+        self.assertIsNone(reset["increment"]["value"])
+        self.assertEqual(reset["counter_state"], "reset_baseline")
+        self.assertEqual(reset["health_label"], "销量基线已重置")
+        self.assertIn("基线已重置", reset["increment"]["reason"])
+
+        snapshots.append(
+            {"id": 4, "product_id": 1, "collected_at": "2026-09-19 01:35:00", "total_sales": 8600, "sales_raw": "已售8600", "sales_precision": "exact", "price": 10}
+        )
+        product["last_collected_at"] = "2026-09-19 01:35:00"
+        restarted = metrics.enrich(product, snapshots, as_of="2026-09-19 01:35:00")
+        self.assertEqual(restarted["increment"]["value"], 20)
+        self.assertEqual(restarted["increment"]["hours"], 1.0)
+        self.assertIsNone(restarted["today"]["value"])
+        self.assertEqual(restarted["counter_state"], "stable")
 
 
 class PhaseOneDatabaseTests(unittest.TestCase):
@@ -165,19 +217,20 @@ class PhaseOneApiTests(unittest.TestCase):
             sales=125,
             price=18.8,
         )
-        with mock.patch.object(server.collector, "collect_product", return_value=collected):
-            response = self.client.post(f"/api/products/{self.product_id}/collect", json={})
-        self.assertEqual(response.status_code, 200)
+        response = self.client.post(f"/api/products/{self.product_id}/collect", json={})
+        self.assertEqual(response.status_code, 202)
+        job_id = response.get_json()["job_id"]
+        self.assertEqual(db.snapshot_count(self.product_id), 1)
+        self.assertTrue(jobs.process_next(lambda _url: collected))
+        self.assertEqual(jobs.get_job(job_id)["status"], "success")
         self.assertEqual(db.snapshot_count(self.product_id), 2)
         self.assertEqual(db.get_product(self.product_id)["total_sales"], 125)
 
         self.client.post(
             f"/api/products/{self.product_id}/state", json={"state": "paused"}
         )
-        with mock.patch.object(server.collector, "collect_product") as collect_mock:
-            response = self.client.post(f"/api/products/{self.product_id}/collect", json={})
+        response = self.client.post(f"/api/products/{self.product_id}/collect", json={})
         self.assertEqual(response.status_code, 409)
-        collect_mock.assert_not_called()
 
 
 class PhaseOneMigrationTests(unittest.TestCase):

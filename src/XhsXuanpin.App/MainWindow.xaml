@@ -151,8 +151,8 @@
             <Border Height="30" Margin="8,0,0,0" Padding="10,0"
                     BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="15">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="全局采集 60 分钟" FontSize="12" Foreground="#595959"/>
-                    <TextBlock Text=" · 待启用" FontSize="11" Foreground="#E89A19"/>
+                    <TextBlock x:Name="GlobalCollectionIntervalText" Text="全局采集 60 分钟" FontSize="12" Foreground="#595959"/>
+                    <TextBlock x:Name="GlobalCollectionStateText" Text=" · 启动中" FontSize="11" Foreground="#E89A19"/>
                 </StackPanel>
             </Border>
             <TextBlock x:Name="CurrentTimeText" Text="--:--" FontSize="12" Foreground="#595959"

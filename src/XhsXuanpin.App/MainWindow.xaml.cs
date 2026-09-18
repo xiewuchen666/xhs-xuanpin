@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private bool _pageStateRefreshInProgress;
     private DateTime _pageMessageHoldUntilUtc;
     private DateTime _lastProductSummaryRefreshUtc = DateTime.MinValue;
+    private DateTime _lastCollectorStatusRefreshUtc = DateTime.MinValue;
     private AndroidProductSummary? _currentProductSummary;
     private bool _windowSizing;
     private string _workspaceView = "single";
@@ -107,6 +108,53 @@ public partial class MainWindow : Window
         AndroidStatus.Text = "Android · 已连接";
         GlobalServiceStatus.Text = "采集服务正常";
         GlobalServiceDot.Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1F, 0xA6, 0x63));
+    }
+
+    private async Task RefreshCollectorStatusAsync()
+    {
+        try
+        {
+            var status = await Http.GetFromJsonAsync<RuntimeStatusResponse>("/api/runtime/status");
+            if (status is null) return;
+
+            GlobalCollectionIntervalText.Text = $"全局采集 {status.auto_interval_minutes} 分钟";
+            if (status.latest_job?.status == "blocked")
+            {
+                GlobalCollectionStateText.Text = " · 需人工验证";
+                GlobalCollectionStateText.Foreground = System.Windows.Media.Brushes.IndianRed;
+            }
+            else if (!status.worker_alive)
+            {
+                GlobalCollectionStateText.Text = " · 服务异常";
+                GlobalCollectionStateText.Foreground = System.Windows.Media.Brushes.IndianRed;
+            }
+            else if (!status.auto_enabled)
+            {
+                GlobalCollectionStateText.Text = " · 已关闭";
+                GlobalCollectionStateText.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x89, 0x89, 0x89));
+            }
+            else if (status.scheduler_running)
+            {
+                GlobalCollectionStateText.Text = " · 运行中";
+                GlobalCollectionStateText.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1F, 0xA6, 0x63));
+            }
+            else
+            {
+                GlobalCollectionStateText.Text = " · 启动中";
+                GlobalCollectionStateText.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE8, 0x9A, 0x19));
+            }
+
+            var nextAuto = status.scheduled?.FirstOrDefault(item => item.id == "auto_collect");
+            if (nextAuto is not null && DateTimeOffset.TryParse(nextAuto.next_run_time, out var nextRun))
+                GlobalCollectionStateText.ToolTip = $"下次自动采集：{nextRun:MM-dd HH:mm:ss}";
+            else
+                GlobalCollectionStateText.ToolTip = null;
+        }
+        catch
+        {
+            GlobalCollectionStateText.Text = " · 状态未知";
+            GlobalCollectionStateText.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE8, 0x9A, 0x19));
+        }
     }
 
     private void InstallPhoneMouseHook()
@@ -393,6 +441,12 @@ public partial class MainWindow : Window
                 SetRuntimeHealthy();
             }
 
+            if (DateTime.UtcNow - _lastCollectorStatusRefreshUtc >= TimeSpan.FromSeconds(5))
+            {
+                await RefreshCollectorStatusAsync();
+                _lastCollectorStatusRefreshUtc = DateTime.UtcNow;
+            }
+
             var isProductDetail = await _runtime.IsProductDetailAsync();
             SetProductActionsVisible(isProductDetail);
             if (DateTime.UtcNow < _pageMessageHoldUntilUtc) return;
@@ -538,4 +592,15 @@ public partial class MainWindow : Window
 
     private sealed record CollectResponse(bool ok, int product_id, string? error);
     private sealed record ActionResponse(bool ok, string? error);
+    private sealed record ScheduledJobResponse(string id, string? next_run_time);
+    private sealed record LatestJobResponse(int id, string status);
+    private sealed record RuntimeStatusResponse(
+        bool ok,
+        bool auto_enabled,
+        int auto_interval_minutes,
+        bool midnight_enabled,
+        bool worker_alive,
+        bool scheduler_running,
+        List<ScheduledJobResponse>? scheduled,
+        LatestJobResponse? latest_job);
 }

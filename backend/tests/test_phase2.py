@@ -7,6 +7,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import db
+import jobs
 import server
 
 
@@ -50,16 +51,22 @@ class PhaseTwoDatabaseTests(unittest.TestCase):
             ),
         )
 
-    def test_shop_grouping_uses_only_single_monitor_membership(self):
+    def test_shop_monitor_membership_is_independent_from_single_monitor(self):
         a = self.add_product("a", "shop-one", "同一家店", 100)
         b = self.add_product("b", "shop-one", "同一家店", 200)
         c = self.add_product("c", "shop-two", "另一家店", 300)
-        db.remove_single_monitor(c)
+        db.add_shop_monitor(a)
+        db.add_shop_monitor(b)
+        db.remove_single_monitor(b)
 
         shops = db.list_shops(as_of="2026-09-18 10:00:00")
         self.assertEqual(len(shops), 1)
         self.assertEqual(shops[0]["shop_name"], "同一家店")
         self.assertEqual(shops[0]["product_count"], 2)
+        self.assertTrue(db.is_in_shop_monitor(a))
+        self.assertTrue(db.is_in_shop_monitor(b))
+        self.assertFalse(db.is_in_shop_monitor(c))
+        self.assertFalse(db.is_in_single_monitor(b))
 
         detail = db.list_shop_products(shops[0]["shop_key"], as_of="2026-09-18 10:00:00")
         self.assertEqual({row["id"] for row in detail}, {a, b})
@@ -73,6 +80,8 @@ class PhaseTwoDatabaseTests(unittest.TestCase):
             "https://xiaohongshu.com/goods-detail/b",
             payload("b", "商品-b", "2026-09-17 11:00:00", shop_id="shop-one", shop_name="同一家店", sales=180),
         )
+        db.add_shop_monitor(a)
+        db.add_shop_monitor(b)
         for product_id, item_id, midnight_sales, current_sales in [
             (a, "a", 100, 130),
             (b, "b", 200, 220),
@@ -111,13 +120,50 @@ class PhaseTwoDatabaseTests(unittest.TestCase):
         fuzzy = payload("fuzzy", "下限商品", "2026-09-18 10:00:00", shop_id="shop-partial", shop_name="部分覆盖店", sales=13000)
         fuzzy["sales_raw"] = "已售1.3万+"
         fuzzy["sales_precision"] = "lower_bound"
-        db.persist("https://xiaohongshu.com/goods-detail/fuzzy", fuzzy)
+        fuzzy_id = db.persist("https://xiaohongshu.com/goods-detail/fuzzy", fuzzy)
+        db.add_shop_monitor(exact_id)
+        db.add_shop_monitor(fuzzy_id)
 
         shops = db.list_shops(as_of="2026-09-18 10:00:00")
         shop = next(row for row in shops if row["shop_name"] == "部分覆盖店")
         self.assertEqual(shop["today"]["value"], 25)
         self.assertEqual(shop["today"]["covered"], 1)
         self.assertEqual(shop["today"]["total"], 2)
+
+    def test_shop_membership_refreshes_metadata_and_moves_when_shop_changes(self):
+        product_id = self.add_product("move-shop", "shop-old", "旧店铺", 100)
+        db.add_shop_monitor(product_id)
+
+        updated = payload(
+            "move-shop",
+            "迁店商品",
+            "2026-09-18 11:00:00",
+            shop_id="shop-new",
+            shop_name="新店铺",
+            sales=120,
+        )
+        updated.update({
+            "shop_score": "4.8",
+            "shop_brand_name": "新品牌",
+            "shop_fans_count": 9999,
+            "shop_notes_count": 88,
+        })
+        db.persist(
+            "https://xiaohongshu.com/goods-detail/move-shop",
+            updated,
+            join_single=False,
+            expected_product_id=product_id,
+        )
+
+        shops = db.list_shops(as_of="2026-09-18 11:00:00")
+        self.assertEqual(len(shops), 1)
+        self.assertEqual(shops[0]["shop_id"], "shop-new")
+        self.assertEqual(shops[0]["shop_name"], "新店铺")
+        self.assertEqual(shops[0]["rating"], "4.8")
+        self.assertEqual(shops[0]["brand_name"], "新品牌")
+        self.assertEqual(shops[0]["brand_fans_count"], 9999)
+        self.assertEqual(shops[0]["brand_notes_count"], 88)
+        self.assertEqual([p["id"] for p in shops[0]["products"]], [product_id])
 
     def test_selection_membership_is_independent_from_single_monitor(self):
         product_id = self.add_product("sel", "shop-sel", "选品店")
@@ -158,6 +204,7 @@ class PhaseTwoApiTests(unittest.TestCase):
             ),
         )
         db.add_selection(self.product_id)
+        db.add_shop_monitor(self.product_id)
         self.app = server.create_app(testing=True)
         self.client = self.app.test_client()
 
@@ -186,7 +233,75 @@ class PhaseTwoApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get("/api/selection").get_json(), [])
         self.assertTrue(db.is_in_single_monitor(self.product_id))
+        self.assertTrue(db.is_in_shop_monitor(self.product_id))
         self.assertEqual(db.snapshot_count(self.product_id), 1)
+
+        response = self.client.delete(f"/api/products/{self.product_id}/shop-monitor")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(db.is_in_shop_monitor(self.product_id))
+        self.assertEqual(self.client.get("/api/shops").get_json(), [])
+        self.assertEqual(db.snapshot_count(self.product_id), 1)
+
+    def test_single_product_can_join_shop_monitor_without_leaving_single(self):
+        extra_id = db.persist(
+            "https://xiaohongshu.com/goods-detail/shop-action",
+            payload(
+                "shop-action",
+                "加入店铺监控商品",
+                "2026-09-18 10:30:00",
+                shop_id="shop-action-store",
+                shop_name="操作店铺",
+            ),
+        )
+        self.assertFalse(db.is_in_shop_monitor(extra_id))
+        response = self.client.post(f"/api/products/{extra_id}/shop-monitor", json={})
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertTrue(body["in_shop_monitor"])
+        self.assertIsNotNone(body["job_id"])
+        self.assertTrue(db.is_in_single_monitor(extra_id))
+        self.assertTrue(db.is_in_shop_monitor(extra_id))
+
+    def test_shop_import_accepts_share_text_and_auto_classifies(self):
+        response = self.client.post(
+            "/api/shops/import",
+            json={"text": "复制后打开小红书 https://xhslink.com/m/shopImport123 看看这个商品"},
+        )
+        self.assertEqual(response.status_code, 202)
+        body = response.get_json()
+        self.assertEqual(body["count"], 1)
+
+        imported = payload(
+            "imported-shop-item",
+            "店铺导入商品",
+            "2026-09-18 12:00:00",
+            shop_id="platform-shop-import",
+            shop_name="自动归类店",
+            sales=188,
+        )
+        imported.update({
+            "shop_score": "4.9",
+            "shop_brand_name": "归类品牌",
+            "shop_fans_count": 12000,
+            "shop_notes_count": 321,
+            "shop_user_id": "user-shop-import",
+            "shop_status": "normal",
+        })
+        self.assertTrue(jobs.process_next(lambda _url: imported))
+
+        job = jobs.get_job(body["job_id"])
+        self.assertEqual(job["status"], "success")
+        product_id = job["items"][0]["product_id"]
+        self.assertFalse(db.is_in_single_monitor(product_id))
+        self.assertTrue(db.is_in_shop_monitor(product_id))
+        shops = db.list_shops(as_of="2026-09-18 12:00:00")
+        shop = next(row for row in shops if row["shop_name"] == "自动归类店")
+        self.assertEqual(shop["shop_id"], "platform-shop-import")
+        self.assertEqual(shop["rating"], "4.9")
+        self.assertEqual(shop["brand_name"], "归类品牌")
+        self.assertEqual(shop["brand_fans_count"], 12000)
+        self.assertEqual(shop["brand_notes_count"], 321)
+        self.assertEqual(shop["product_count"], 1)
 
     def test_direct_selection_collect_does_not_join_single_monitor(self):
         direct = payload(

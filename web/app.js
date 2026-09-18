@@ -15,7 +15,23 @@ const actionClose = document.querySelector('#actionClose');
 const actionCollect = document.querySelector('#actionCollect');
 const actionPause = document.querySelector('#actionPause');
 const actionSelection = document.querySelector('#actionSelection');
+const actionShop = document.querySelector('#actionShop');
 const actionRemove = document.querySelector('#actionRemove');
+
+const shopImportOverlay = document.querySelector('#shopImportOverlay');
+const shopImportClose = document.querySelector('#shopImportClose');
+const shopImportCancel = document.querySelector('#shopImportCancel');
+const shopImportSubmit = document.querySelector('#shopImportSubmit');
+const shopImportText = document.querySelector('#shopImportText');
+
+const settingsOverlay = document.querySelector('#settingsOverlay');
+const settingsClose = document.querySelector('#settingsClose');
+const settingsCancel = document.querySelector('#settingsCancel');
+const settingsSave = document.querySelector('#settingsSave');
+const autoEnabledInput = document.querySelector('#autoEnabledInput');
+const autoIntervalInput = document.querySelector('#autoIntervalInput');
+const midnightEnabledInput = document.querySelector('#midnightEnabledInput');
+const settingsRuntime = document.querySelector('#settingsRuntime');
 
 let activeActionProductId = null;
 let activeActionContext = 'single';
@@ -68,16 +84,40 @@ function metricValue(metric) {
 
 function metricCell(metric, positiveAccent = false) {
   if (!metric || metric.value == null) {
-    const reason = esc(metric?.reason || '缺少有效采样');
-    return '<span class="metric-value" title="' + reason + '">—</span><small class="metric-hint" title="' + reason + '">' +
-      (metric?.quality === 'anomaly' ? '计数异常' : '待有效采样') + '</small>';
+    const rawReason = metric?.reason || '缺少有效采样';
+    const reason = esc(rawReason);
+    let hint = metric?.quality === 'anomaly' ? '计数异常' : '待有效采样';
+    if (rawReason.includes('回落待确认')) hint = '回落待确认';
+    else if (rawReason.includes('基线已重置') || rawReason.includes('基线重置')) hint = '基线已重置';
+    return '<span class="metric-value" title="' + reason + '">—</span><small class="metric-hint" title="' + reason + '">' + hint + '</small>';
   }
   const reason = esc(metric.reason || '');
   const value = Number(metric.value);
   const display = value > 0 ? '+' + formatSales(value) : formatSales(value);
   const valueClass = positiveAccent && value > 0 ? 'metric-value positive' : 'metric-value';
-  const suffix = metric.quality === 'approximate' ? '<small class="metric-hint">近似边界</small>' : '';
-  return '<span class="' + valueClass + '" title="' + reason + '">' + display + '</span>' + suffix;
+  return '<span class="' + valueClass + '" title="' + reason + '">' + display + '</span>';
+}
+
+function totalSalesCell(product) {
+  if (product.total_sales == null) {
+    return '<span class="metric-value">—</span><small class="metric-hint">待有效采样</small>';
+  }
+  return '<span class="metric-value" title="' + esc(product.precision_label || '') + '">' +
+    formatSales(product.total_sales) + '</span>';
+}
+
+function intervalHint(hours) {
+  const value = Number(hours);
+  if (!Number.isFinite(value) || value < 0) return '';
+  const rounded = Math.round(value * 10) / 10;
+  return (Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)) + ' 小时区间';
+}
+
+function incrementCell(metric) {
+  if (!metric || metric.value == null) return metricCell(metric);
+  const base = metricCell(metric);
+  const hint = intervalHint(metric.hours);
+  return base + (hint ? '<small class="metric-hint">' + esc(hint) + '</small>' : '');
 }
 
 function summaryMetric(products, key) {
@@ -138,9 +178,7 @@ function productToolbar(products) {
   document.querySelector('#shopFilter').addEventListener('change', renderCurrentProductList);
   document.querySelector('#sortSelect').addEventListener('change', renderCurrentProductList);
   document.querySelector('#collectPageButton').addEventListener('click', collectVisibleProducts);
-  document.querySelector('#settingsButton').addEventListener('click', () => {
-    showNotice('自动采集设置将在下一阶段启用；当前规划的全局采集间隔为 60 分钟。');
-  });
+  document.querySelector('#settingsButton').addEventListener('click', openSettings);
 }
 
 function metricNumber(product, key) {
@@ -172,6 +210,7 @@ function filterAndSortProducts(products) {
 function productRow(product, context) {
   const paused = product.monitor_state === 'paused';
   const selected = Number(product.in_selection_pool) === 1;
+  const inShop = Number(product.in_shop_monitor) === 1;
   const image = product.image_url
     ? '<img src="' + esc(product.image_url) + '" alt="" referrerpolicy="no-referrer">'
     : '<img alt="">';
@@ -182,17 +221,17 @@ function productRow(product, context) {
       (selected && context !== 'selection' ? '<em class="selected">★ 已在选品中心</em>' : '') +
       '</div></div></td>' +
       '<td class="num">' + formatPrice(product.price) + '</td>' +
-      '<td class="num"><span class="metric-value">' + formatSales(product.total_sales) + '</span><small class="metric-hint">' + esc(product.precision_label || '') + '</small></td>' +
+      '<td class="num">' + totalSalesCell(product) + '</td>' +
       '<td class="num">' + metricCell(product.today, true) + '</td>' +
       '<td class="num">' + metricCell(product.rolling24, true) + '</td>' +
-      '<td class="num">' + metricCell(product.increment) + '</td>' +
+      '<td class="num">' + incrementCell(product.increment) + '</td>' +
       '<td><span>' + esc(product.last_collected_at || '—') + '</span></td>' +
       '<td><span class="status ' + (paused ? 'paused' : (product.health || 'active')) + '">' +
         esc(paused ? '● 已暂停' : ('● ' + (product.health_label || '正常'))) + '</span></td>' +
       '<td><div class="actions"><button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
       'data-more-product-id="' + product.id + '" data-more-title="' + esc(product.title) + '" ' +
       'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" ' +
-      'data-more-context="' + esc(context) + '">···</button></div></td></tr>';
+      'data-more-shop="' + (inShop ? '1' : '0') + '" data-more-context="' + esc(context) + '">···</button></div></td></tr>';
 }
 
 function renderProductTable(products, context) {
@@ -266,11 +305,15 @@ function shopsToolbar() {
       '<option value="updated_desc">最近更新 ↓</option><option value="count_desc">监控商品数 ↓</option>' +
     '</select><div class="grow"></div>' +
     '<button class="btn" type="button" disabled title="导出将在后续阶段实现">⇩ 导出</button>' +
-    '<button class="btn primary" id="collectShopPageButton" type="button">立即采集本页</button>';
+    '<button class="btn" id="addShopProductButton" type="button">＋ 添加商品</button>' +
+    '<button class="btn primary" id="collectShopPageButton" type="button">立即采集本页</button>' +
+    '<button class="btn" id="settingsButton" type="button">设置</button>';
 
   document.querySelector('#toolbarSearch').addEventListener('input', () => { shopPage = 1; renderShopList(); });
   document.querySelector('#shopSort').addEventListener('change', () => { shopPage = 1; renderShopList(); });
+  document.querySelector('#addShopProductButton').addEventListener('click', openShopImport);
   document.querySelector('#collectShopPageButton').addEventListener('click', collectVisibleShopProducts);
+  document.querySelector('#settingsButton').addEventListener('click', openSettings);
 }
 
 function shopMetric(metric) {
@@ -307,20 +350,23 @@ function shopProductRow(product) {
     '<a class="product-title-link" href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer" title="' + esc(product.title) + '">' + esc(product.title) + '</a>' +
     '<span>' + (paused ? '已暂停监控' : '商品监控中') + '</span></div></div></td>' +
     '<td class="num">' + formatPrice(product.price) + '</td>' +
-    '<td class="num"><span class="metric-value">' + formatSales(product.total_sales) + '</span><small class="metric-hint">' + esc(product.precision_label || '') + '</small></td>' +
+    '<td class="num">' + totalSalesCell(product) + '</td>' +
     '<td class="num">' + metricCell(product.today, true) + '</td>' +
     '<td class="num">' + metricCell(product.rolling24, true) + '</td>' +
+    '<td class="num">' + incrementCell(product.increment) + '</td>' +
     '<td>' + esc(product.last_collected_at || '—') + '</td>' +
     '<td><button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
       'data-more-product-id="' + product.id + '" data-more-title="' + esc(product.title) + '" ' +
-      'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" data-more-context="shop">···</button></td>' +
+      'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" ' +
+      'data-more-shop="1" data-more-context="shop">···</button></td>' +
     '</tr>';
 }
 
 function shopExpandedTable(shop) {
   return '<div class="shop-expand"><table class="shop-products-table"><thead><tr>' +
-    '<th style="width:30%">已监控商品</th><th style="width:9%">当前价</th><th style="width:12%">累计销量</th>' +
-    '<th style="width:12%">今日新增</th><th style="width:12%">近24小时</th><th style="width:17%">更新时间</th><th style="width:8%">操作</th>' +
+    '<th style="width:24%">已监控商品</th><th style="width:7%">当前价</th><th style="width:11%">累计销量</th>' +
+    '<th style="width:11%">今日新增</th><th style="width:11%">近24小时新增</th><th style="width:12%">最近区间新增</th>' +
+    '<th style="width:16%">更新时间</th><th style="width:8%">操作</th>' +
     '</tr></thead><tbody>' + (shop.products || []).map(shopProductRow).join('') + '</tbody></table></div>';
 }
 
@@ -351,14 +397,21 @@ function renderShopList() {
   const pageItems = shops.slice((shopPage - 1) * shopPageSize, shopPage * shopPageSize);
 
   if (!pageItems.length) {
-    content.innerHTML = '<div class="empty">没有符合条件的店铺。</div>' + renderShopPager(shops.length);
+    content.innerHTML = '<div class="empty">店铺监控还没有商品。点击“添加商品”，粘贴商品分享链接或分享口令后会自动按所属店铺归类。</div>' + renderShopPager(shops.length);
   } else {
     content.innerHTML = '<div class="shoplist">' + pageItems.map(shop => {
       const initial = esc((shop.shop_name || '店').slice(0,1));
       const expanded = expandedShopKeys.has(shop.shop_key);
+      const meta = [
+        shop.rating ? '评分 ' + shop.rating : '',
+        shop.brand_name ? '品牌 ' + shop.brand_name : '',
+        shop.brand_fans_count != null ? '粉丝 ' + formatSales(shop.brand_fans_count) : '',
+        shop.brand_notes_count != null ? '笔记 ' + formatSales(shop.brand_notes_count) : ''
+      ].filter(Boolean).join(' · ');
       return '<div class="shopcard">' +
         '<div class="shoprow" data-shop-toggle="' + esc(shop.shop_key) + '" aria-expanded="' + (expanded ? 'true' : 'false') + '">' +
-        '<div class="shopid"><div class="shoplogo">' + initial + '</div><div><b>' + esc(shop.shop_name) + '</b><span>' + shop.product_count + ' 个已监控商品</span></div></div>' +
+        '<div class="shopid"><div class="shoplogo">' + initial + '</div><div><b>' + esc(shop.shop_name) + '</b><span>' + shop.product_count + ' 个已监控商品</span>' +
+        (meta ? '<small class="shop-meta-line">' + esc(meta) + '</small>' : '') + '</div></div>' +
         '<div class="shopmetric"><span>已监控</span><b>' + shop.product_count + ' 款</b></div>' +
         '<div class="shopmetric"><span>今日新增汇总</span>' + shopMetric(shop.today) + '</div>' +
         '<div class="shopmetric"><span>近24h新增汇总</span>' + shopMetric(shop.rolling24) + '</div>' +
@@ -391,7 +444,7 @@ async function renderShopsPage({keepNotice = false} = {}) {
   if (!keepNotice) hideNotice();
 }
 
-async function collectProducts(products, button) {
+async function collectProducts(products, button, scope = 'all') {
   const targets = products.filter(p => p.monitor_state === 'active');
   if (!targets.length) {
     showNotice('当前范围没有可立即采集的正常商品。');
@@ -399,35 +452,160 @@ async function collectProducts(products, button) {
   }
   const original = button.textContent;
   button.disabled = true;
-  button.textContent = '采集中…';
-  let success = 0, failed = 0;
-  for (const product of targets) {
-    try {
-      await api('/api/products/' + product.id + '/collect', {method:'POST', body:'{}'});
-      success += 1;
-    } catch (_) {
-      failed += 1;
-    }
+  button.textContent = '提交中…';
+  try {
+    const result = await api('/api/jobs/collect', {
+      method:'POST',
+      body:JSON.stringify({scope, product_ids:targets.map(product => product.id)})
+    });
+    showNotice(
+      '采集任务 #' + result.job_id + ' 已提交，共 ' + targets.length + ' 个商品；后台将按顺序采集。',
+      'success'
+    );
+  } catch (error) {
+    showNotice(error.message || '提交采集任务失败', 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
   }
-  button.disabled = false;
-  button.textContent = original;
-  await reloadCurrentView(true);
-  showNotice(
-    failed ? '采集完成：成功 ' + success + ' 个，失败 ' + failed + ' 个。' : success + ' 个商品已完成立即采集。',
-    failed ? 'error' : 'success'
-  );
 }
 
 async function collectVisibleProducts() {
   const button = document.querySelector('#collectPageButton');
-  await collectProducts(filterAndSortProducts(allProducts), button);
+  await collectProducts(
+    filterAndSortProducts(allProducts),
+    button,
+    view === 'selection' ? 'selection' : 'single'
+  );
 }
 
 async function collectVisibleShopProducts() {
   const button = document.querySelector('#collectShopPageButton');
   const productsById = new Map();
   currentShopPageItems().forEach(shop => (shop.products || []).forEach(product => productsById.set(product.id, product)));
-  await collectProducts([...productsById.values()], button);
+  await collectProducts([...productsById.values()], button, 'shop');
+}
+
+function closeShopImport() {
+  shopImportOverlay.hidden = true;
+}
+
+function openShopImport() {
+  shopImportOverlay.hidden = false;
+  shopImportText.value = '';
+  shopImportSubmit.disabled = false;
+  shopImportText.focus();
+}
+
+async function submitShopImport() {
+  const text = shopImportText.value.trim();
+  if (!text) {
+    showNotice('请先粘贴商品分享链接或分享口令。', 'error');
+    return;
+  }
+  shopImportSubmit.disabled = true;
+  shopImportSubmit.textContent = '提交中…';
+  try {
+    const result = await api('/api/shops/import', {
+      method:'POST',
+      body:JSON.stringify({text})
+    });
+    closeShopImport();
+    showNotice(
+      '店铺监控添加任务 #' + result.job_id + ' 已提交，共识别 ' + result.count + ' 个商品；采集后会自动按所属店铺归类。',
+      'success'
+    );
+  } catch (error) {
+    showNotice(error.message || '添加店铺监控商品失败', 'error');
+  } finally {
+    shopImportSubmit.disabled = false;
+    shopImportSubmit.textContent = '提交添加';
+  }
+}
+
+function closeSettings() {
+  settingsOverlay.hidden = true;
+}
+
+function formatRuntimeTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('zh-CN', {hour12:false});
+}
+
+async function openSettings() {
+  settingsOverlay.hidden = false;
+  settingsRuntime.textContent = '正在读取运行状态…';
+  settingsSave.disabled = true;
+  try {
+    const [settings, runtime] = await Promise.all([
+      api('/api/settings'),
+      api('/api/runtime/status')
+    ]);
+    autoEnabledInput.checked = settings.auto_enabled === '1';
+    autoIntervalInput.value = Number(settings.auto_interval_minutes || 60);
+    midnightEnabledInput.checked = settings.midnight_enabled === '1';
+    const nextAuto = (runtime.scheduled || []).find(item => item.id === 'auto_collect');
+    const latest = runtime.latest_job;
+    const latestText = latest
+      ? '最近任务 #' + latest.id + '：' + latest.status
+      : '尚无后台采集任务';
+    settingsRuntime.textContent =
+      (runtime.worker_alive ? '采集 Worker 正常' : '采集 Worker 未运行') +
+      ' · ' + (runtime.auto_enabled ? '自动采集已开启' : '自动采集已关闭') +
+      ' · 下次自动采集：' + formatRuntimeTime(nextAuto?.next_run_time) +
+      ' · ' + latestText;
+    settingsSave.disabled = false;
+    autoIntervalInput.focus();
+    autoIntervalInput.select();
+  } catch (error) {
+    settingsRuntime.textContent = error.message || '读取设置失败';
+  }
+}
+
+async function saveSettings() {
+  const interval = Number(autoIntervalInput.value);
+  if (!Number.isInteger(interval) || interval < 5 || interval > 1440) {
+    settingsRuntime.textContent = '采集间隔必须是 5–1440 分钟之间的整数。';
+    return;
+  }
+  settingsSave.disabled = true;
+  try {
+    await api('/api/settings', {
+      method:'POST',
+      body:JSON.stringify({
+        auto_enabled:autoEnabledInput.checked,
+        auto_interval_minutes:interval,
+        midnight_enabled:midnightEnabledInput.checked
+      })
+    });
+    closeSettings();
+    showNotice('全局采集设置已保存。', 'success');
+  } catch (error) {
+    settingsRuntime.textContent = error.message || '保存设置失败';
+  } finally {
+    settingsSave.disabled = false;
+  }
+}
+
+async function refreshCurrentViewData() {
+  if (!actionOverlay.hidden || !settingsOverlay.hidden || !shopImportOverlay.hidden) return;
+  if (view === 'single') {
+    allProducts = await api('/api/products');
+    productHeader(allProducts, false);
+    renderCurrentProductList();
+    return;
+  }
+  if (view === 'selection') {
+    allProducts = await api('/api/selection');
+    productHeader(allProducts, true);
+    renderCurrentProductList();
+    return;
+  }
+  allShops = await api('/api/shops');
+  shopsHeader();
+  renderShopList();
 }
 
 function closeActionPanel() {
@@ -440,11 +618,14 @@ function openActionPanel(button) {
   activeActionContext = button.dataset.moreContext || 'single';
   const paused = button.dataset.morePaused === '1';
   const selected = button.dataset.moreSelected === '1';
+  const inShop = button.dataset.moreShop === '1';
 
-  [actionCollect, actionPause, actionSelection, actionRemove].forEach(item => {
+  [actionCollect, actionPause, actionSelection, actionShop, actionRemove].forEach(item => {
     item.disabled = false;
     item.hidden = false;
   });
+  actionSelection.classList.remove('danger');
+  actionShop.classList.remove('danger');
 
   actionProductTitle.textContent = button.dataset.moreTitle || '当前商品';
   actionCollect.disabled = paused;
@@ -459,17 +640,32 @@ function openActionPanel(button) {
     actionSelection.querySelector('.action-icon').textContent = '−';
     actionSelection.querySelector('strong').textContent = '移出选品中心';
     actionSelection.querySelector('small').textContent = '仅解除选品中心归属，商品主体与历史数据保留';
+    actionShop.hidden = true;
     actionRemove.hidden = true;
   } else {
     actionSelection.dataset.modalAction = 'selection';
-    actionSelection.classList.remove('danger');
     actionSelection.querySelector('.action-icon').textContent = '☆';
     actionSelection.disabled = selected;
     actionSelection.querySelector('strong').textContent = selected ? '已加入选品中心' : '加入选品中心';
     actionSelection.querySelector('small').textContent = selected ? '该商品已经在选品中心中' : '保留当前监控，同时加入选品中心';
-    actionRemove.hidden = false;
-    actionRemove.disabled = false;
-    actionRemove.querySelector('small').textContent = '移出单品监控列表，历史采集数据保留';
+
+    if (activeActionContext === 'shop') {
+      actionShop.dataset.modalAction = 'leave-shop';
+      actionShop.classList.add('danger');
+      actionShop.querySelector('.action-icon').textContent = '−';
+      actionShop.querySelector('strong').textContent = '移出店铺监控';
+      actionShop.querySelector('small').textContent = '仅解除店铺监控归属，商品主体与历史数据保留';
+      actionRemove.hidden = true;
+    } else {
+      actionShop.dataset.modalAction = 'shop';
+      actionShop.querySelector('.action-icon').textContent = '店';
+      actionShop.disabled = inShop;
+      actionShop.querySelector('strong').textContent = inShop ? '已加入店铺监控' : '加入店铺监控';
+      actionShop.querySelector('small').textContent = inShop ? '该商品已经在所属店铺监控中' : '按商品所属店铺自动归类并持续采集';
+      actionRemove.hidden = false;
+      actionRemove.disabled = false;
+      actionRemove.querySelector('small').textContent = '移出单品监控列表，历史采集数据保留';
+    }
   }
 
   actionOverlay.hidden = false;
@@ -481,13 +677,14 @@ async function runAction(action, button) {
   if (!productId || button.disabled) return;
   if (action === 'remove' && !confirm('确认移出单品监控？历史采集数据会保留。')) return;
   if (action === 'leave-selection' && !confirm('确认移出选品中心？商品主体和历史数据都会保留。')) return;
+  if (action === 'leave-shop' && !confirm('确认移出店铺监控？商品主体和历史采集数据都会保留。')) return;
 
   const buttons = actionOverlay.querySelectorAll('button[data-modal-action]');
   buttons.forEach(item => item.disabled = true);
   try {
     if (action === 'collect') {
-      await api('/api/products/' + productId + '/collect', {method:'POST', body:'{}'});
-      showNotice('立即采集完成。', 'success');
+      const result = await api('/api/products/' + productId + '/collect', {method:'POST', body:'{}'});
+      showNotice('采集任务 #' + result.job_id + ' 已提交，后台正在处理。', 'success');
     } else if (action === 'pause' || action === 'resume') {
       await api('/api/products/' + productId + '/state', {
         method:'POST', body:JSON.stringify({state: action === 'pause' ? 'paused' : 'active'})
@@ -496,6 +693,17 @@ async function runAction(action, button) {
     } else if (action === 'selection') {
       await api('/api/products/' + productId + '/selection', {method:'POST', body:'{}'});
       showNotice('已加入选品中心。', 'success');
+    } else if (action === 'shop') {
+      const result = await api('/api/products/' + productId + '/shop-monitor', {method:'POST', body:'{}'});
+      showNotice(
+        result.job_id
+          ? '已加入店铺监控，并提交店铺资料刷新任务 #' + result.job_id + '。'
+          : '已加入店铺监控。',
+        'success'
+      );
+    } else if (action === 'leave-shop') {
+      await api('/api/products/' + productId + '/shop-monitor', {method:'DELETE'});
+      showNotice('已移出店铺监控；商品主体和历史数据均保留。', 'success');
     } else if (action === 'leave-selection') {
       await api('/api/products/' + productId + '/selection', {method:'DELETE'});
       showNotice('已移出选品中心；商品主体和历史数据均保留。', 'success');
@@ -544,8 +752,26 @@ actionOverlay.addEventListener('click', event => {
   if (button && !button.disabled) runAction(button.dataset.modalAction, button);
 });
 actionClose.addEventListener('click', closeActionPanel);
+
+shopImportOverlay.addEventListener('click', event => {
+  if (event.target === shopImportOverlay) closeShopImport();
+});
+shopImportClose.addEventListener('click', closeShopImport);
+shopImportCancel.addEventListener('click', closeShopImport);
+shopImportSubmit.addEventListener('click', submitShopImport);
+
+settingsOverlay.addEventListener('click', event => {
+  if (event.target === settingsOverlay) closeSettings();
+});
+settingsClose.addEventListener('click', closeSettings);
+settingsCancel.addEventListener('click', closeSettings);
+settingsSave.addEventListener('click', saveSettings);
+
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && !actionOverlay.hidden) closeActionPanel();
+  if (event.key !== 'Escape') return;
+  if (!shopImportOverlay.hidden) closeShopImport();
+  else if (!settingsOverlay.hidden) closeSettings();
+  else if (!actionOverlay.hidden) closeActionPanel();
 });
 
 window.addEventListener('xhs-product-collected', () => {
@@ -558,3 +784,7 @@ reloadCurrentView(false).catch(error => {
   showNotice(error.message || '本地服务暂不可用，请查看启动状态。', 'error');
   content.innerHTML = '<div class="empty">页面加载失败</div>';
 });
+
+setInterval(() => {
+  refreshCurrentViewData().catch(() => {});
+}, 15000);

@@ -45,6 +45,35 @@ def validate_url(url: str) -> str:
     return raw
 
 
+def extract_share_urls(text: str) -> list[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    candidates = re.findall(
+        r"https?://(?:[A-Za-z0-9-]+\.)?(?:xiaohongshu\.com|xhslink\.com)/[^\s<>\"']+",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not candidates:
+        candidates = re.findall(
+            r"(?:[A-Za-z0-9-]+\.)?(?:xiaohongshu\.com|xhslink\.com)/[^\s<>\"']+",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        candidates = ["https://" + candidate for candidate in candidates]
+
+    result: list[str] = []
+    for candidate in candidates:
+        candidate = candidate.rstrip("，。；;、）)]}！!？?")
+        try:
+            validated = validate_url(candidate)
+        except ValueError:
+            continue
+        if validated not in result:
+            result.append(validated)
+    return result
+
+
 def _display_price(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
