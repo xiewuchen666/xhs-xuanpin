@@ -78,6 +78,7 @@ public partial class MainWindow : Window
         UpdateWindowStateButton();
         Closed += (_, _) =>
         {
+            AppLogger.Info("MainWindow", "Main window closed; disposing runtime");
             _pageStateTimer.Stop();
             RemovePhoneMouseHook();
             _runtime.Dispose();
@@ -86,6 +87,7 @@ public partial class MainWindow : Window
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        AppLogger.Info("MainWindow", "Main window loaded; initializing runtime");
         CurrentTimeText.Text = DateTime.Now.ToString("HH:mm");
         try
         {
@@ -103,9 +105,11 @@ public partial class MainWindow : Window
             _runtimeReady = true;
             _pageStateTimer.Start();
             await RefreshPageStateAsync();
+            AppLogger.Info("MainWindow", "Runtime initialization completed");
         }
         catch (Exception ex)
         {
+            AppLogger.Error("MainWindow", "Runtime initialization failed", ex);
             AndroidStatus.Text = "Android · 启动失败";
             GlobalServiceStatus.Text = "采集服务异常";
             GlobalServiceDot.Fill = System.Windows.Media.Brushes.IndianRed;
@@ -214,6 +218,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            AppLogger.Error("MainWindow", "Global collection toggle failed", ex);
             GlobalCollectionStateText.Text = " · 切换失败";
             GlobalCollectionStateText.Foreground = System.Windows.Media.Brushes.IndianRed;
             GlobalCollectionStateText.ToolTip = ex.Message;
@@ -336,6 +341,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            AppLogger.Error("MainWindow", "Xiaohongshu app toggle failed", ex);
             BridgeTitle.Text = "小红书开关操作失败";
             BridgeStatus.Text = ex.Message;
             _lastXhsAppStateRefreshUtc = DateTime.MinValue;
@@ -558,6 +564,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            AppLogger.Error("MainWindow", "Export failed", ex);
             PostWorkspaceExportResult(false, $"导出失败：{ex.Message}");
         }
     }
@@ -897,6 +904,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            AppLogger.Error(
+                "MainWindow",
+                addToSelection ? "Add-to-selection action failed" : "Add-to-monitor action failed",
+                ex);
             BridgeTitle.Text = addToSelection ? "加入选品中心失败" : "加入监控失败";
             BridgeStatus.Text = ex.Message;
             _pageMessageHoldUntilUtc = DateTime.UtcNow.AddSeconds(3);

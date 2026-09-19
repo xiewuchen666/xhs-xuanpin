@@ -12,6 +12,7 @@ import collector
 import db
 import exporter
 import jobs
+import logging_setup
 import metrics
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -301,10 +302,21 @@ def configure_scheduler(app: Flask) -> None:
             scheduler.remove_job(name)
 
     def submit(midnight: bool = False) -> None:
+        trigger = "midnight" if midnight else "interval"
+        app.logger.info("Scheduled collection trigger fired: %s", trigger)
         try:
-            jobs.enqueue("all", is_midnight=midnight)
-        except ValueError:
-            app.logger.info("No eligible products for scheduled collection")
+            job_id = jobs.enqueue("all", is_midnight=midnight)
+            app.logger.info(
+                "Scheduled collection queued: job=%s trigger=%s",
+                job_id,
+                trigger,
+            )
+        except ValueError as exc:
+            app.logger.info(
+                "Scheduled collection skipped: trigger=%s reason=%s",
+                trigger,
+                exc,
+            )
 
     if cfg.get("auto_enabled") == "1":
         scheduler.add_job(
@@ -329,6 +341,13 @@ def configure_scheduler(app: Flask) -> None:
             misfire_grace_time=60,
         )
 
+    app.logger.info(
+        "Scheduler configured: auto_enabled=%s interval_minutes=%s midnight_enabled=%s",
+        cfg.get("auto_enabled") == "1",
+        cfg.get("auto_interval_minutes", "60"),
+        cfg.get("midnight_enabled") == "1",
+    )
+
 
 def start_runtime(app: Flask) -> tuple[jobs.Worker, BackgroundScheduler]:
     worker = jobs.Worker()
@@ -338,6 +357,7 @@ def start_runtime(app: Flask) -> tuple[jobs.Worker, BackgroundScheduler]:
     app.extensions["collection_scheduler"] = scheduler
     configure_scheduler(app)
     scheduler.start()
+    app.logger.info("Collection runtime started: worker_alive=%s scheduler_running=%s", worker.alive, scheduler.running)
     return worker, scheduler
 
 
@@ -350,19 +370,30 @@ def main() -> None:
         help="Run the local API without worker/scheduler for isolated tests.",
     )
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    log_path = logging_setup.configure_logging()
     app = create_app()
+    app.logger.info(
+        "Backend service starting: port=%s no_collector=%s log=%s",
+        args.port,
+        args.no_collector,
+        log_path,
+    )
     worker = None
     scheduler = None
     try:
         if not args.no_collector:
             worker, scheduler = start_runtime(app)
         app.run(host="127.0.0.1", port=args.port, debug=False, use_reloader=False, threaded=True)
+    except Exception:
+        app.logger.exception("Backend service terminated by unhandled exception")
+        raise
     finally:
+        app.logger.info("Backend service shutting down")
         if scheduler and scheduler.running:
             scheduler.shutdown(wait=False)
         if worker:
             worker.stop()
+        app.logger.info("Backend service stopped")
 
 
 if __name__ == "__main__":

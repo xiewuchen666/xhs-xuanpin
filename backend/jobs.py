@@ -94,6 +94,12 @@ def enqueue(
                 None,
             )
             if existing is not None:
+                logger.info(
+                    "Queue request coalesced into existing job: job=%s kind=%s scope=%s",
+                    existing,
+                    kind,
+                    scope,
+                )
                 return int(existing)
             raise ValueError("目标商品已有采集任务")
 
@@ -109,6 +115,15 @@ def enqueue(
         conn.executemany(
             "INSERT INTO job_items(job_id,product_id,url) VALUES(?,?,?)",
             [(job_id, product_id, url) for product_id, url in filtered],
+        )
+        logger.info(
+            "Job queued: job=%s kind=%s scope=%s items=%s midnight=%s parent=%s",
+            job_id,
+            kind,
+            scope,
+            len(filtered),
+            is_midnight,
+            parent_id,
         )
         return job_id
 
@@ -258,6 +273,13 @@ def process_next(collect_fn=None) -> bool:
             (db.now_text(), job["id"]),
         )
 
+    logger.info(
+        "Job started: job=%s kind=%s scope=%s midnight=%s",
+        job["id"],
+        job["kind"],
+        job["scope"],
+        bool(job["is_midnight"]),
+    )
     blocked = False
     while True:
         with closing(db.connect()) as conn, conn:
@@ -363,6 +385,12 @@ def process_next(collect_fn=None) -> bool:
                     """,
                     (product_id, db.now_text(), item["id"]),
                 )
+            logger.info(
+                "Job item succeeded: job=%s item=%s product=%s",
+                job["id"],
+                item["id"],
+                product_id,
+            )
         except Exception as exc:
             message = safe_error(exc)
             logger.warning("Job %s item %s failed: %s", job["id"], item["id"], message)
@@ -382,6 +410,12 @@ def process_next(collect_fn=None) -> bool:
                 for term in ("人工安全验证", "验证码", "安全验证", "登录态不足")
             ):
                 blocked = True
+                logger.error(
+                    "Job blocked by verification/login requirement: job=%s item=%s reason=%s",
+                    job["id"],
+                    item["id"],
+                    message,
+                )
                 break
 
     with closing(db.connect()) as conn, conn:
@@ -429,6 +463,16 @@ def process_next(collect_fn=None) -> bool:
             "UPDATE jobs SET status=?,finished_at=?,error=? WHERE id=?",
             (status, db.now_text(), error, job["id"]),
         )
+
+    logger.info(
+        "Job finished: job=%s status=%s success=%s failed=%s skipped=%s cancelled=%s",
+        job["id"],
+        status,
+        counts.get("success", 0),
+        counts.get("failed", 0),
+        counts.get("skipped", 0),
+        counts.get("cancelled", 0),
+    )
     return True
 
 
@@ -447,6 +491,7 @@ class Worker:
             daemon=True,
         )
         self.thread.start()
+        logger.info("Collection worker thread started")
 
     def _run(self) -> None:
         while not self.stop_event.is_set():
@@ -458,9 +503,11 @@ class Worker:
             self.stop_event.wait(0.15 if worked else 0.8)
 
     def stop(self) -> None:
+        logger.info("Collection worker stop requested")
         self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=2)
+        logger.info("Collection worker stopped: alive=%s", self.alive)
 
     @property
     def alive(self) -> bool:

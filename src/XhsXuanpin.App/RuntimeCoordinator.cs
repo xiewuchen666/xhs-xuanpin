@@ -29,6 +29,7 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     public async Task StartAsync(IntPtr phoneHost)
     {
+        AppLogger.Info("Runtime", "Runtime startup requested");
         if (phoneHost == IntPtr.Zero) throw new InvalidOperationException("手机宿主窗口尚未创建");
         _phoneHost = phoneHost;
 
@@ -44,6 +45,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         await EnsureScrcpyAsync();
         HideMuMuWindows();
         _started = true;
+        AppLogger.Info("Runtime", "Runtime startup completed");
     }
 
     public Task<bool> IsProductDetailAsync() =>
@@ -94,12 +96,14 @@ internal sealed class RuntimeCoordinator : IDisposable
             if (DateTime.UtcNow - _lastScrcpyRecoveryAttemptUtc < TimeSpan.FromSeconds(3)) return false;
             _lastScrcpyRecoveryAttemptUtc = DateTime.UtcNow;
 
+            AppLogger.Warning("Runtime", "scrcpy health check failed; starting recovery");
             ResetScrcpyState(terminateRunningProcess: true);
             if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
 
             await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
             await EnsureScrcpyAsync();
             SetPhoneVisible(phoneVisible);
+            AppLogger.Info("Runtime", "scrcpy recovery completed");
             return true;
         }
         finally
@@ -132,7 +136,11 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     private async Task EnsurePythonServiceAsync()
     {
-        if (await IsServiceReadyAsync()) return;
+        if (await IsServiceReadyAsync())
+        {
+            AppLogger.Info("Runtime", "Backend service already healthy");
+            return;
+        }
 
         var python = Path.Combine(_root, ".venv", "Scripts", "python.exe");
         var server = Path.Combine(_root, "backend", "server.py");
@@ -149,8 +157,10 @@ internal sealed class RuntimeCoordinator : IDisposable
         startInfo.ArgumentList.Add("17861");
         _python = Process.Start(startInfo) ?? throw new InvalidOperationException("Python 本地服务启动失败");
         _ownsPython = true;
+        AppLogger.Info("Runtime", $"Backend service process started; pid={_python.Id}");
 
         await WaitForServiceAsync();
+        AppLogger.Info("Runtime", "Backend service health check passed");
     }
 
     private static async Task<bool> IsServiceReadyAsync()
@@ -188,6 +198,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (!File.Exists(_adb)) throw new InvalidOperationException("未找到 MuMu ADB");
         if (!await AdbReadyAsync())
         {
+            AppLogger.Warning("Runtime", "Android ADB is not ready; launching MuMu player");
             var manager = @"D:\Program Files\Netease\MuMu\nx_main\MuMuManager.exe";
             Process.Start(new ProcessStartInfo(manager, "api launch_player 0") { UseShellExecute = false, CreateNoWindow = true });
             for (var i = 0; i < 120 && !await AdbReadyAsync(); i++) await Task.Delay(1000);
@@ -323,10 +334,15 @@ internal sealed class RuntimeCoordinator : IDisposable
     public async Task StopXhsAsync()
     {
         if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
+        AppLogger.Info("Runtime", "Stopping Xiaohongshu app");
         await RunAsync(_adb, "-s", Serial, "shell", "am", "force-stop", "com.xingin.xhs");
         for (var i = 0; i < 20; i++)
         {
-            if (!await IsXhsRunningAsync()) return;
+            if (!await IsXhsRunningAsync())
+            {
+                AppLogger.Info("Runtime", "Xiaohongshu app stopped");
+                return;
+            }
             await Task.Delay(100);
         }
         throw new InvalidOperationException("小红书未能在预期时间内停止");
@@ -335,11 +351,16 @@ internal sealed class RuntimeCoordinator : IDisposable
     public async Task StartXhsAsync()
     {
         if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
+        AppLogger.Info("Runtime", "Starting Xiaohongshu app");
         await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
         await RunAsync(_adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
         for (var i = 0; i < 30; i++)
         {
-            if (await IsXhsRunningAsync()) return;
+            if (await IsXhsRunningAsync())
+            {
+                AppLogger.Info("Runtime", "Xiaohongshu app process started");
+                return;
+            }
             await Task.Delay(100);
         }
         throw new InvalidOperationException("小红书未能在预期时间内启动");
@@ -385,6 +406,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (IsScrcpyHealthy())
         {
             AttachScrcpyWindow();
+            AppLogger.Info("Runtime", "Existing scrcpy window is healthy and attached");
             return;
         }
 
@@ -404,6 +426,7 @@ internal sealed class RuntimeCoordinator : IDisposable
                     _scrcpyWindow = existing;
                     _ownsScrcpy = true;
                     AttachScrcpyWindow();
+                    AppLogger.Info("Runtime", $"Reused existing scrcpy process; pid={process.Id}");
                     return;
                 }
                 process.Dispose();
@@ -440,6 +463,7 @@ internal sealed class RuntimeCoordinator : IDisposable
 
         _scrcpy = Process.Start(startInfo) ?? throw new InvalidOperationException("scrcpy 启动失败");
         _ownsScrcpy = true;
+        AppLogger.Info("Runtime", $"scrcpy process started; pid={_scrcpy.Id}");
         for (var i = 0; i < 80 && _scrcpyWindow == IntPtr.Zero; i++)
         {
             if (_scrcpy.HasExited)
@@ -452,6 +476,7 @@ internal sealed class RuntimeCoordinator : IDisposable
             throw new InvalidOperationException($"未找到本次 scrcpy 进程({_scrcpy.Id})的窗口");
 
         AttachScrcpyWindow();
+        AppLogger.Info("Runtime", $"scrcpy window attached; hwnd={_scrcpyWindow}");
     }
 
     private bool IsScrcpyHealthy()
@@ -608,9 +633,11 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     public void Dispose()
     {
+        AppLogger.Info("Runtime", "Runtime disposal started");
         ResetScrcpyState(terminateRunningProcess: true);
         if (_ownsPython && _python is { HasExited: false }) _python.Kill(true);
         _python?.Dispose();
+        AppLogger.Info("Runtime", "Runtime disposal completed");
     }
 }
 

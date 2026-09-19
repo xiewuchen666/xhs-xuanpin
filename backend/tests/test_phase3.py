@@ -128,6 +128,20 @@ class PhaseThreeTests(unittest.TestCase):
         self.assertEqual(db.snapshot_count(second), 2)
         self.assertEqual(db.get_product(first)["last_attempt_status"], "failed")
 
+    def test_product_failure_log_redacts_url(self):
+        self.add_single("redacted-log")
+        jobs.enqueue("all")
+
+        def fail_with_url(_url: str):
+            raise RuntimeError("failed https://example.com/item?xsec_token=secret")
+
+        with self.assertLogs(jobs.logger, level="WARNING") as captured:
+            self.assertTrue(jobs.process_next(fail_with_url))
+
+        output = "\n".join(captured.output)
+        self.assertIn("failed [链接]", output)
+        self.assertNotIn("xsec_token", output)
+
     def test_verification_failure_blocks_remaining_batch(self):
         self.add_single("verify-a")
         self.add_single("verify-b")
