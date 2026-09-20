@@ -49,6 +49,18 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertEqual(result["increment"]["value"], 30)
         self.assertEqual(result["health_label"], "数据已更新")
 
+    def test_rolling_window_stays_anchored_to_latest_sample_between_runs(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-18 10:00:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-17 10:00:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-18 10:00:00", "total_sales": 150, "sales_raw": "已售150", "sales_precision": "exact", "price": 10},
+        ]
+
+        result = metrics.enrich(product, snapshots, as_of="2026-09-18 10:31:00")
+
+        self.assertEqual(result["rolling24"]["value"], 50)
+        self.assertEqual(result["rolling24"]["to_time"], "2026-09-18 10:00:00")
+
     def test_lower_bound_sales_are_not_faked_into_growth(self):
         product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-18 10:00:00"}
         snapshots = [

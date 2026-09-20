@@ -277,19 +277,20 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
         else missing("缺少昨日或今日日界附近的已确认采样")
     )
     increment = recent_increment(rows, effective, latest)
+    window_end = latest["_time"] if latest else current
     rolling = window_metric(
         rows,
         effective,
-        current - timedelta(hours=24),
-        current,
+        window_end - timedelta(hours=24),
+        window_end,
         window_tolerance,
         current,
     )
     prior = window_metric(
         rows,
         effective,
-        current - timedelta(hours=48),
-        current - timedelta(hours=24),
+        window_end - timedelta(hours=48),
+        window_end - timedelta(hours=24),
         window_tolerance,
         current,
     )
