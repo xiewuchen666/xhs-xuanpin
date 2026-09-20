@@ -222,8 +222,8 @@
                     Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
             <Border Height="30" Padding="10,0" BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="15">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="GlobalServiceDot" Width="7" Height="7" Fill="#1FA663" Margin="0,0,6,0"/>
-                    <TextBlock x:Name="GlobalServiceStatus" Text="采集服务正常" FontSize="12" Foreground="#595959"
+                    <Ellipse x:Name="GlobalServiceDot" Width="7" Height="7" Fill="#E89A19" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="GlobalServiceStatus" Text="采集服务启动中" FontSize="12" Foreground="#595959"
                                VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
@@ -264,12 +264,12 @@
                 </Grid.ColumnDefinitions>
                 <Button Grid.Column="0" x:Name="XhsAppToggleButton"
                         Style="{StaticResource PhoneAppToggleButtonStyle}"
-                        Content="检测中…"
+                        Content="初始化中…"
                         Margin="0"
                         IsEnabled="False"
                         Click="XhsAppToggleButton_Click"
-                        ToolTip="关闭小红书 App 和手机画面流；MuMu、ADB 和后台采集保持运行"/>
-                <TextBlock Grid.Column="2" x:Name="AndroidStatus" Text="Android · 正在连接" Foreground="#595959" FontSize="13"
+                        ToolTip="Android 正在后台初始化；右侧监控和后台采集已可使用"/>
+                <TextBlock Grid.Column="2" x:Name="AndroidStatus" Text="Android · 后台初始化" Foreground="#595959" FontSize="13"
                            VerticalAlignment="Center" HorizontalAlignment="Right"/>
             </Grid>
 
@@ -298,9 +298,9 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Margin="14,8,10,8" VerticalAlignment="Center">
-                        <TextBlock x:Name="BridgeTitle" Text="请在小红书中打开商品详情" FontSize="12"
+                        <TextBlock x:Name="BridgeTitle" Text="Android 正在后台初始化" FontSize="12"
                                    FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock x:Name="BridgeStatus" Text="进入商品详情后可一键采集" Foreground="#595959"
+                        <TextBlock x:Name="BridgeStatus" Text="右侧监控工作区可正常使用" Foreground="#595959"
                                    FontSize="12" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
                     <Button Grid.Column="1" x:Name="MonitorButton" Content="加入监控" Height="34"

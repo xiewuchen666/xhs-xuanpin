@@ -23,7 +23,9 @@ public partial class MainWindow : Window
     private bool _phoneKeyboardActive;
     private bool _phoneVisible = true;
     private GridLength _expandedPhoneWidth = new(34, GridUnitType.Star);
-    private bool _runtimeReady;
+    private bool _workspaceReady;
+    private bool _androidReady;
+    private bool _androidInitializationFailed;
     private bool _monitorBusy;
     private bool _globalCollectionToggleBusy;
     private bool _autoCollectionEnabled = true;
@@ -87,40 +89,64 @@ public partial class MainWindow : Window
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        AppLogger.Info("MainWindow", "Main window loaded; initializing runtime");
+        AppLogger.Info("MainWindow", "Main window loaded; initializing workspace");
         CurrentTimeText.Text = DateTime.Now.ToString("HH:mm");
         try
         {
-            await _runtime.StartAsync(_phonePanel.Handle);
-            _runtime.ResizePhone(_phonePanel.ClientSize);
-            SetRuntimeHealthy();
-            await RefreshXhsAppStateAsync(force: true);
-            InstallPhoneMouseHook();
+            await _runtime.StartBackendAsync();
+            SetBackendHealthy();
             await Workspace.EnsureCoreWebView2Async();
             Workspace.CoreWebView2.NewWindowRequested += Workspace_NewWindowRequested;
             Workspace.CoreWebView2.DownloadStarting += Workspace_DownloadStarting;
             Workspace.CoreWebView2.WebMessageReceived += Workspace_WebMessageReceived;
             NavigateWorkspace("single");
-            FitPhoneSurface();
-            _runtimeReady = true;
+            _workspaceReady = true;
             _pageStateTimer.Start();
             await RefreshPageStateAsync();
-            AppLogger.Info("MainWindow", "Runtime initialization completed");
+            AppLogger.Info("MainWindow", "Workspace initialization completed; starting Android in background");
+            _ = InitializeAndroidInBackgroundAsync();
         }
         catch (Exception ex)
         {
-            AppLogger.Error("MainWindow", "Runtime initialization failed", ex);
-            AndroidStatus.Text = "Android · 启动失败";
+            AppLogger.Error("MainWindow", "Workspace initialization failed", ex);
+            _androidInitializationFailed = true;
+            AndroidStatus.Text = "Android · 未启动";
             GlobalServiceStatus.Text = "采集服务异常";
             GlobalServiceDot.Fill = System.Windows.Media.Brushes.IndianRed;
+            BridgeTitle.Text = "工作台启动失败";
             BridgeStatus.Text = ex.Message;
             SetProductActionsVisible(false);
+            UpdateXhsAppToggleButton();
         }
     }
 
-    private void SetRuntimeHealthy()
+    private async Task InitializeAndroidInBackgroundAsync()
     {
-        AndroidStatus.Text = "Android · 已连接";
+        try
+        {
+            await _runtime.StartAndroidAsync(_phonePanel.Handle);
+            _runtime.ResizePhone(_phonePanel.ClientSize);
+            InstallPhoneMouseHook();
+            _androidReady = true;
+            AndroidStatus.Text = "Android · 已连接";
+            await RefreshXhsAppStateAsync(force: true);
+            FitPhoneSurface();
+            AppLogger.Info("MainWindow", "Android background initialization completed");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("MainWindow", "Android background initialization failed; workspace remains available", ex);
+            _androidInitializationFailed = true;
+            AndroidStatus.Text = "Android · 启动失败";
+            BridgeTitle.Text = "Android 暂不可用";
+            BridgeStatus.Text = $"右侧监控和后台采集可继续使用；{ex.Message}";
+            SetProductActionsVisible(false);
+            UpdateXhsAppToggleButton();
+        }
+    }
+
+    private void SetBackendHealthy()
+    {
         GlobalServiceStatus.Text = "采集服务正常";
         GlobalServiceDot.Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1F, 0xA6, 0x63));
     }
@@ -260,6 +286,16 @@ public partial class MainWindow : Window
 
     private void UpdateXhsAppToggleButton()
     {
+        if (!_androidReady)
+        {
+            XhsAppToggleButton.IsEnabled = false;
+            XhsAppToggleButton.Content = _androidInitializationFailed ? "Android 不可用" : "初始化中…";
+            XhsAppToggleButton.ToolTip = _androidInitializationFailed
+                ? "Android 初始化失败；右侧监控和后台采集仍可使用"
+                : "Android 正在后台初始化；右侧监控和后台采集已可使用";
+            return;
+        }
+
         if (_xhsToggleBusy)
         {
             XhsAppToggleButton.IsEnabled = false;
@@ -781,22 +817,24 @@ public partial class MainWindow : Window
 
     private async Task RefreshPageStateAsync()
     {
-        if (!_runtimeReady || _monitorBusy || _xhsToggleBusy || _pageStateRefreshInProgress) return;
+        if (!_workspaceReady || _monitorBusy || _xhsToggleBusy || _pageStateRefreshInProgress) return;
 
         _pageStateRefreshInProgress = true;
         try
         {
-            var recovered = await _runtime.EnsureHealthyAsync(_phoneVisible && _xhsLiveSurfaceReady);
-            if (recovered)
-            {
-                FitPhoneSurface();
-                SetRuntimeHealthy();
-            }
-
             if (DateTime.UtcNow - _lastCollectorStatusRefreshUtc >= TimeSpan.FromSeconds(5))
             {
                 await RefreshCollectorStatusAsync();
                 _lastCollectorStatusRefreshUtc = DateTime.UtcNow;
+            }
+
+            if (!_androidReady) return;
+
+            var recovered = await _runtime.EnsureHealthyAsync(_phoneVisible && _xhsLiveSurfaceReady);
+            if (recovered)
+            {
+                FitPhoneSurface();
+                AndroidStatus.Text = "Android · 已连接";
             }
 
             await RefreshXhsAppStateAsync();
@@ -849,8 +887,10 @@ public partial class MainWindow : Window
                 BridgeStatus.Text = "进入商品详情后可一键加入监控或选品中心";
             }
         }
-        catch
+        catch (Exception ex)
         {
+            AppLogger.Warning("MainWindow", $"Android page state refresh failed; workspace remains available: {ex.Message}");
+            AndroidStatus.Text = "Android · 连接异常";
             SetProductActionsVisible(false);
             BridgeTitle.Text = "正在识别小红书页面";
             BridgeStatus.Text = "页面状态暂不可用，请稍后重试";

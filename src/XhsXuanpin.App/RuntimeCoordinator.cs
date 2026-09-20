@@ -20,7 +20,7 @@ internal sealed class RuntimeCoordinator : IDisposable
     private IntPtr _scrcpyWindow;
     private IntPtr _phoneHost;
     private AndroidUi? _androidUi;
-    private bool _started;
+    private bool _androidStarted;
     private bool _ownsPython;
     private bool _ownsScrcpy;
     private bool _scrcpySuspended;
@@ -29,25 +29,40 @@ internal sealed class RuntimeCoordinator : IDisposable
     private readonly SemaphoreSlim _androidInputLock = new(1, 1);
     private DateTime _lastScrcpyRecoveryAttemptUtc;
 
-    public async Task StartAsync(IntPtr phoneHost)
+    public async Task StartBackendAsync()
     {
-        AppLogger.Info("Runtime", "Runtime startup requested");
+        AppLogger.Info("Runtime", "Backend startup requested");
+        await EnsurePythonServiceAsync();
+        AppLogger.Info("Runtime", "Backend startup completed");
+    }
+
+    public async Task StartAndroidAsync(IntPtr phoneHost)
+    {
+        AppLogger.Info("Runtime", "Android initialization requested");
         if (phoneHost == IntPtr.Zero) throw new InvalidOperationException("手机宿主窗口尚未创建");
         _phoneHost = phoneHost;
 
-        if (_started)
+        if (_androidStarted)
         {
             AttachScrcpyWindow();
             return;
         }
 
-        await EnsurePythonServiceAsync();
-        await EnsureAndroidAsync();
-        _androidUi = new AndroidUi(_adb, Serial);
-        await EnsureScrcpyAsync();
-        HideMuMuWindows();
-        _started = true;
-        AppLogger.Info("Runtime", "Runtime startup completed");
+        try
+        {
+            await EnsureAndroidAsync();
+            _androidUi = new AndroidUi(_adb, Serial);
+            await EnsureScrcpyAsync();
+            HideMuMuWindows();
+            _androidStarted = true;
+            AppLogger.Info("Runtime", "Android initialization completed");
+        }
+        catch
+        {
+            _androidUi = null;
+            ResetScrcpyState(terminateRunningProcess: true);
+            throw;
+        }
     }
 
     public Task<bool> IsProductDetailAsync() =>
@@ -89,7 +104,7 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     public async Task<bool> EnsureHealthyAsync(bool phoneVisible)
     {
-        if (!_started || _scrcpySuspended || IsScrcpyHealthy()) return false;
+        if (!_androidStarted || _scrcpySuspended || IsScrcpyHealthy()) return false;
         if (!await _scrcpyLifecycleLock.WaitAsync(0)) return false;
 
         try

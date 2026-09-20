@@ -58,6 +58,8 @@ Windows
 - **Python** 负责业务数据、采集、定时任务和导出。
 - **SQLite** 负责本地持久化。
 
+启动隔离边界：Python 后端与 WebView2 数据工作区构成可独立使用的主链路；MuMu、ADB 和 scrcpy 在右侧页面开始加载后异步初始化。Android 初始化失败只降级左侧能力，不改变后端、定时采集和右侧页面状态。
+
 ---
 
 ## 3. 前端选择
@@ -338,15 +340,14 @@ XhsXuanpin.exe
 
 程序负责：
 
-1. 启动本地 Python 服务。
-2. 检测 MuMu Android 实例。
-3. 必要时启动 MuMu。
-4. 等待 ADB 在线。
-5. 启动小红书。
-6. 隐藏 MuMu 原生窗口。
-7. 启动 scrcpy。
-8. 将 scrcpy 嵌入工作台左侧。
-9. WebView2 加载右侧本地页面。
+1. 立即显示 WPF 工作台外壳。
+2. 启动本地 Python 服务。
+3. 初始化 WebView2 并优先加载右侧本地页面。
+4. 后台检测 MuMu Android 实例，必要时启动 MuMu。
+5. 后台等待 ADB 在线并隐藏 MuMu 原生窗口。
+6. 后台启动 scrcpy，将其嵌入左侧并恢复小红书真实运行状态。
+
+第 4–6 步失败时记录日志并在左侧显示失败原因，不中断已经可用的右侧页面和 Python 自动采集。
 
 正式版不要求用户分别手工启动 Python、MuMu 或 scrcpy。
 
