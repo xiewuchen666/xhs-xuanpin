@@ -18,7 +18,7 @@ import db
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"success", "partial", "failed", "blocked", "cancelled", "interrupted"}
-BASELINE_SLOTS = {"2355", "0000", "0005", "0010"}
+BASELINE_SLOTS = {"2355"}
 RETRY_DELAY_SECONDS = 30
 
 
@@ -52,7 +52,7 @@ def enqueue(
     if baseline_slot is not None:
         is_midnight = True
     elif is_midnight:
-        baseline_slot = "0000"
+        baseline_slot = "2355"
 
     if kind == "import":
         if scope == "all":

@@ -345,9 +345,6 @@ def configure_scheduler(app: Flask) -> None:
     cfg = db.get_settings()
     midnight_jobs = {
         "midnight_collect_2355": (23, 55, "2355"),
-        "midnight_collect_0000": (0, 0, "0000"),
-        "midnight_collect_0005": (0, 5, "0005"),
-        "midnight_collect_0010": (0, 10, "0010"),
     }
     for name in ("auto_collect", "midnight_collect", *midnight_jobs):
         if scheduler.get_job(name):

@@ -50,34 +50,28 @@ def exact_counter(row: Optional[Dict[str, Any]]) -> bool:
 
 
 def midnight_actions(rows: List[Dict[str, Any]]) -> Dict[int, str]:
-    """Hold dense midnight drops until 00:10 or a recovery confirms 23:55."""
-    groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    for row in rows:
-        day = str(row.get("baseline_day") or "")
-        slot = str(row.get("baseline_slot") or "")
-        if day and slot and exact_counter(row):
-            groups.setdefault(day, {})[slot] = row
-
-    actions: Dict[int, str] = {}
-    for slots in groups.values():
-        before, at_midnight = slots.get("2355"), slots.get("0000")
-        if not before or not at_midnight or int(at_midnight["total_sales"]) >= int(before["total_sales"]):
-            continue
-
-        validators = [slots[slot] for slot in ("0005", "0010") if slot in slots]
+    """Use each 23:55 sample as the next day's baseline."""
+    actions = {
+        id(row): "ignore"
+        for row in rows
+        if row.get("is_midnight") and row.get("baseline_slot") not in (None, "", "2355")
+    }
+    baselines = [row for row in rows if row.get("baseline_slot") == "2355" and exact_counter(row)]
+    for index, baseline in enumerate(baselines):
+        cutoff = baselines[index + 1]["_time"] if index + 1 < len(baselines) else baseline["_time"] + timedelta(days=1)
+        candidates = [
+            row for row in rows
+            if exact_counter(row)
+            and baseline["_time"] < row["_time"] < cutoff
+            and id(row) not in actions
+        ]
         recovered = next(
-            (row for row in validators if int(row["total_sales"]) >= int(before["total_sales"])),
+            (row for row in candidates if int(row["total_sales"]) >= int(baseline["total_sales"])),
             None,
         )
-        if recovered:
-            for row in [at_midnight, *validators]:
-                if row["_time"] < recovered["_time"] and int(row["total_sales"]) < int(before["total_sales"]):
-                    actions[id(row)] = "ignore"
-        elif "0010" not in slots:
-            for row in [at_midnight, *validators]:
-                actions[id(row)] = "hold"
-        else:
-            actions[id(at_midnight)] = "reset"
+        for row in candidates:
+            if int(row["total_sales"]) < int(baseline["total_sales"]) and (not recovered or row["_time"] < recovered["_time"]):
+                actions[id(row)] = "ignore" if recovered else "hold"
     return actions
 
 

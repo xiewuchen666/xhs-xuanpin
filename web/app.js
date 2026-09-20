@@ -960,8 +960,8 @@ function renderTrendChart() {
     tab.setAttribute('aria-selected', active ? 'true' : 'false');
   });
   trendNote.textContent = activeTrendMode === 'daily'
-    ? '日销量按相邻自然日有效基线计算；今日为截至最近一次有效采集的未完整数据。'
-    : '小时销量只显示普通全局采集区间；午夜基线确认采样不展示，缺采用灰色虚线柱提示。';
+    ? '日销量按每日 23:55 基线计算；今日为截至最近一次有效采集的未完整数据。'
+    : '小时销量只显示普通全局采集区间；23:55 基线采样不展示，缺采用灰色虚线柱提示。';
   if (!valid.length && !gapPoints.length) {
     trendSummary.textContent = '暂无可计算的趋势点';
     trendChart.innerHTML = '<div class="trend-empty">采集历史不足，或当前区间存在待确认数据。</div>';

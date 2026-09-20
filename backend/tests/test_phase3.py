@@ -84,9 +84,6 @@ class PhaseThreeTests(unittest.TestCase):
             {
                 "auto_collect",
                 "midnight_collect_2355",
-                "midnight_collect_0000",
-                "midnight_collect_0005",
-                "midnight_collect_0010",
             },
         )
 
@@ -143,15 +140,14 @@ class PhaseThreeTests(unittest.TestCase):
         item_ids = [item["product_id"] for item in jobs.get_job(job_id)["items"]]
         self.assertEqual(item_ids, [shared, selection_only, shop_only])
 
-    def test_distinct_midnight_slots_are_queued_separately(self):
+    def test_only_2355_is_a_valid_midnight_baseline_slot(self):
         self.add_single("dense-midnight")
 
         first = jobs.enqueue("all", baseline_slot="2355")
-        second = jobs.enqueue("all", baseline_slot="0000")
 
-        self.assertNotEqual(first, second)
         self.assertEqual(jobs.get_job(first)["baseline_slot"], "2355")
-        self.assertEqual(jobs.get_job(second)["baseline_slot"], "0000")
+        with self.assertRaisesRegex(ValueError, "无效午夜基线采样时点"):
+            jobs.enqueue("all", baseline_slot="0000")
 
     def test_queued_item_is_rechecked_and_skipped_after_pause(self):
         product_id = self.add_single("pause-after-queue")
