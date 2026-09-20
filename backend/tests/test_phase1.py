@@ -56,8 +56,9 @@ class MetricCompatibilityTests(unittest.TestCase):
             {"id": 2, "collected_at": "2026-09-18 01:00:00", "total_sales": 107, "sales_raw": "已售107", "sales_precision": "exact"},
             {"id": 3, "collected_at": "2026-09-18 02:00:00", "total_sales": 111, "sales_raw": "已售111", "sales_precision": "exact"},
             {"id": 4, "collected_at": "2026-09-19 00:00:00", "total_sales": 150, "sales_raw": "已售150", "sales_precision": "exact"},
-            {"id": 5, "collected_at": "2026-09-19 01:00:00", "total_sales": 156, "sales_raw": "已售156", "sales_precision": "exact"},
-            {"id": 6, "collected_at": "2026-09-19 03:30:00", "total_sales": 170, "sales_raw": "已售170", "sales_precision": "exact"},
+            {"id": 5, "collected_at": "2026-09-19 00:05:00", "total_sales": 151, "sales_raw": "已售151", "sales_precision": "exact"},
+            {"id": 6, "collected_at": "2026-09-19 01:00:00", "total_sales": 156, "sales_raw": "已售156", "sales_precision": "exact"},
+            {"id": 7, "collected_at": "2026-09-19 03:30:00", "total_sales": 170, "sales_raw": "已售170", "sales_precision": "exact"},
         ]
 
         trend = metrics.sales_trend(snapshots, as_of="2026-09-19 03:30:00")
@@ -66,7 +67,11 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertEqual(by_day["2026-09-18"]["value"], 48)
         self.assertEqual(by_day["2026-09-19"]["value"], 20)
         self.assertTrue(by_day["2026-09-19"]["partial"])
-        self.assertEqual([point["value"] for point in trend["hourly"]], [None, 6, None])
+        self.assertEqual([point["value"] for point in trend["hourly"]], [None, 5, None])
+        self.assertNotIn("00:05", [point["label"] for point in trend["hourly"]])
+        self.assertTrue(trend["hourly"][-1]["gap"])
+        self.assertEqual(trend["hourly"][-1]["gap_total"], 14)
+        self.assertEqual(trend["hourly"][-1]["average_hourly"], 5.6)
         self.assertIn("2.5 小时", trend["hourly"][-1]["reason"])
 
     def test_rolling_window_stays_anchored_to_latest_sample_between_runs(self):

@@ -955,7 +955,7 @@ function renderTrendChart() {
   });
   trendNote.textContent = activeTrendMode === 'daily'
     ? '日销量按相邻自然日有效基线计算；今日为截至最近一次有效采集的未完整数据。'
-    : '小时销量按相邻有效采集的实际区间显示；非 30–90 分钟区间、回落及重置点断线，不拆分估算。';
+    : '小时销量按实际采集区间显示；不足 30 分钟的密集点隐藏，缺采用灰色虚线提示，回落及重置仍断线。';
   if (!valid.length) {
     trendSummary.textContent = '暂无可计算的趋势点';
     trendChart.innerHTML = '<div class="trend-empty">采集历史不足，或当前区间存在待确认数据。</div>';
@@ -975,6 +975,23 @@ function renderTrendChart() {
     else if (segment.length) { segments.push(segment); segment = []; }
   });
   if (segment.length) segments.push(segment);
+
+  const gapLines = [];
+  for (let index = 0; index < coordinates.length;) {
+    if (coordinates[index]) { index += 1; continue; }
+    const start = index;
+    while (index < coordinates.length && !coordinates[index]) index += 1;
+    const gapPoints = points.slice(start, index);
+    const before = coordinates[start - 1];
+    const after = coordinates[index];
+    if (!before || !after || gapPoints.some(point => !point.gap)) continue;
+    const detail = gapPoints.map(point =>
+      (point.from_time || '—') + ' 至 ' + point.time + '：区间共新增 +' + formatSales(point.gap_total) +
+      '，平均每小时 ' + Number(point.average_hourly).toLocaleString('zh-CN') + '（仅区间平均）'
+    ).join('；');
+    const geometry = 'x1="' + before.x + '" y1="' + before.y + '" x2="' + after.x + '" y2="' + after.y + '"';
+    gapLines.push('<line ' + geometry + ' class="trend-gap"/><line ' + geometry + ' class="trend-gap-hit"><title>' + esc(detail) + '</title></line>');
+  }
 
   const grid = Array.from({length:5}, (_, index) => {
     const value = maximum * (4 - index) / 4;
@@ -998,9 +1015,11 @@ function renderTrendChart() {
       esc(period + '：+' + formatSales(point.value) + '，' + (point.reason || '')) + '</title></circle>';
   }).join('');
   const latest = valid[valid.length - 1];
-  trendSummary.textContent = '有效点 ' + valid.length + ' 个 · 最近 +' + formatSales(latest.value) + ' · 最高 +' + formatSales(maximum);
+  const gapCount = points.filter(point => point.gap).length;
+  trendSummary.textContent = '有效点 ' + valid.length + ' 个 · 最近 +' + formatSales(latest.value) + ' · 最高 +' + formatSales(maximum) +
+    (gapCount ? ' · 缺采区间 ' + gapCount + ' 个' : '');
   trendChart.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="商品成交趋势折线图">' +
-    grid + labels + lines + circles + '</svg>';
+    grid + labels + gapLines.join('') + lines + circles + '</svg>';
 }
 
 async function openTrendPanel(button) {

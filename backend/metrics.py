@@ -513,14 +513,24 @@ def sales_trend(
             continue
         hours = point.get("hours")
         value = point.get("delta")
+        if value is not None and hours is not None and hours < 0.5:
+            continue
         regular_interval = value is not None and hours is not None and 0.5 <= hours <= 1.5
+        gap = value is not None and hours is not None and hours > 1.5
         reason = point["reason"]
-        if value is not None and not regular_interval:
-            reason = "实际采集间隔为 %.1f 小时，不作为单小时销量点" % hours
+        if gap:
+            reason = "中间缺少连续采集（%.1f 小时）；区间共新增 %s，平均每小时 %.1f（仅区间平均）" % (
+                hours,
+                value,
+                value / hours,
+            )
         hourly.append({
             **point,
             "label": point_time.strftime("%H:%M"),
             "value": value if regular_interval else None,
             "reason": reason,
+            "gap": gap,
+            "gap_total": value if gap else None,
+            "average_hourly": round(value / hours, 2) if gap else None,
         })
     return {"daily": daily, "hourly": hourly}
