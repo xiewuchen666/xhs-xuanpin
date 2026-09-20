@@ -597,9 +597,23 @@ internal sealed class RuntimeCoordinator : IDisposable
         };
         foreach (var argument in arguments) process.StartInfo.ArgumentList.Add(argument);
         process.Start();
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var error = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+                process.Kill(true);
+            await Task.WhenAll(outputTask, errorTask);
+            throw new TimeoutException("ADB 命令执行超时，请检查模拟器连接");
+        }
+
+        var output = await outputTask;
+        var error = await errorTask;
         if (process.ExitCode != 0)
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? output.Trim() : error.Trim());
         return output;

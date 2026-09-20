@@ -781,7 +781,7 @@ public partial class MainWindow : Window
 
     private async Task RefreshPageStateAsync()
     {
-        if (!_runtimeReady || _monitorBusy || _pageStateRefreshInProgress) return;
+        if (!_runtimeReady || _monitorBusy || _xhsToggleBusy || _pageStateRefreshInProgress) return;
 
         _pageStateRefreshInProgress = true;
         try
