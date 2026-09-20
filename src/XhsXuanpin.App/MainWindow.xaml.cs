@@ -274,14 +274,32 @@ public partial class MainWindow : Window
             : "启动并唤醒小红书 App";
     }
 
-    private void UpdatePhoneSurfaceMode()
+    private void UpdatePhoneSurfaceMode(bool layoutChanged = false)
     {
         var showLivePhone = _phoneVisible && _xhsRunning && _xhsLiveSurfaceReady;
-        PhoneHost.Visibility = showLivePhone ? Visibility.Visible : Visibility.Hidden;
+        var visibility = showLivePhone ? Visibility.Visible : Visibility.Hidden;
+        var visibilityChanged = PhoneHost.Visibility != visibility;
+        if (!showLivePhone)
+            _runtime.SetPhoneVisible(false);
+
+        PhoneHost.Visibility = visibility;
         XhsLaunchPlaceholder.Visibility = _phoneVisible && !showLivePhone
             ? Visibility.Visible
             : Visibility.Hidden;
-        _runtime.SetPhoneVisible(showLivePhone);
+
+        var liveSurfaceStarting = _phoneVisible && _xhsRunning && !_xhsLiveSurfaceReady;
+        if (!layoutChanged && !visibilityChanged && !liveSurfaceStarting)
+        {
+            _runtime.SetPhoneVisible(showLivePhone);
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_phoneVisible)
+                FitPhoneSurface();
+            _runtime.SetPhoneVisible(_phoneVisible && _xhsRunning && _xhsLiveSurfaceReady);
+        }, DispatcherPriority.Loaded);
     }
 
     private async void XhsAppToggleButton_Click(object sender, RoutedEventArgs e)
@@ -301,7 +319,7 @@ public partial class MainWindow : Window
             if (_xhsRunning)
             {
                 _xhsLiveSurfaceReady = false;
-                UpdatePhoneSurfaceMode();
+                UpdatePhoneSurfaceMode(layoutChanged: true);
                 BridgeTitle.Text = "正在关闭小红书";
                 BridgeStatus.Text = "后台监控采集继续运行";
                 await _runtime.StopXhsAsync();
@@ -313,7 +331,7 @@ public partial class MainWindow : Window
             else
             {
                 _xhsLiveSurfaceReady = false;
-                UpdatePhoneSurfaceMode();
+                UpdatePhoneSurfaceMode(layoutChanged: true);
                 BridgeTitle.Text = "正在启动小红书";
                 BridgeStatus.Text = "启动完成前继续显示占位画面";
                 await _runtime.StartXhsAsync();
@@ -337,7 +355,7 @@ public partial class MainWindow : Window
             }
 
             _lastXhsAppStateRefreshUtc = DateTime.UtcNow;
-            UpdatePhoneSurfaceMode();
+            UpdatePhoneSurfaceMode(layoutChanged: true);
         }
         catch (Exception ex)
         {
@@ -391,7 +409,7 @@ public partial class MainWindow : Window
             var insidePhone = _runtime.ContainsPhoneScreenPoint(info.Point.X, info.Point.Y);
             Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
             {
-                _phoneKeyboardActive = insidePhone && _phoneVisible;
+                _phoneKeyboardActive = insidePhone && PhoneHost.IsVisible;
                 if (_phoneKeyboardActive)
                 {
                     PhoneKeyboardSink.Focus();
@@ -633,7 +651,7 @@ public partial class MainWindow : Window
         Dispatcher.InvokeAsync(() =>
         {
             if (_phoneVisible) FitPhoneSurface();
-            UpdatePhoneSurfaceMode();
+            UpdatePhoneSurfaceMode(layoutChanged: true);
         }, DispatcherPriority.Loaded);
     }
 
