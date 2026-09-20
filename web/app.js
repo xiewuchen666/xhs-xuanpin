@@ -247,10 +247,7 @@ function filterAndSortProducts(products) {
   });
 
   const sortKey = sort?.value || 'rolling24_desc';
-  if (sortKey === 'rolling24_desc') result.sort((a,b) => {
-    const rank = product => product.rolling24?.value == null ? 2 : (product.rolling24?.partial ? 1 : 0);
-    return rank(a) - rank(b) || metricNumber(b,'rolling24') - metricNumber(a,'rolling24');
-  });
+  if (sortKey === 'rolling24_desc') result.sort((a,b) => metricNumber(b,'rolling24') - metricNumber(a,'rolling24'));
   else if (sortKey === 'today_desc') result.sort((a,b) => metricNumber(b,'today') - metricNumber(a,'today'));
   else if (sortKey === 'sales_desc') result.sort((a,b) => metricNumber(b,'sales') - metricNumber(a,'sales'));
   else result.sort((a,b) => metricNumber(b,'updated') - metricNumber(a,'updated'));
