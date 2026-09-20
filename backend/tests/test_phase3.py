@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -87,6 +88,47 @@ class PhaseThreeTests(unittest.TestCase):
                 "midnight_collect_0005",
                 "midnight_collect_0010",
             },
+        )
+
+    def test_scheduler_restart_keeps_anchor_and_immediately_catches_up_when_overdue(self):
+        with closing(db.connect()) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO jobs(kind,scope,status,created_at,started_at,finished_at)
+                VALUES('collect','all','success',?,?,?)
+                """,
+                (
+                    "2026-09-20 07:55:17",
+                    "2026-09-20 07:55:17",
+                    "2026-09-20 07:55:43",
+                ),
+            )
+
+        app = server.create_app(testing=True)
+        scheduler = BackgroundScheduler(timezone=metrics.TZ)
+        app.extensions["collection_scheduler"] = scheduler
+        with (
+            mock.patch("server.metrics.now", return_value=datetime(2026, 9, 20, 8, 34, tzinfo=metrics.TZ)),
+            mock.patch("server.jobs.enqueue") as enqueue,
+        ):
+            server.configure_scheduler(app)
+        enqueue.assert_not_called()
+        self.assertEqual(
+            scheduler.get_job("auto_collect").trigger.start_date,
+            datetime(2026, 9, 20, 8, 55, 17, tzinfo=metrics.TZ),
+        )
+
+        overdue_scheduler = BackgroundScheduler(timezone=metrics.TZ)
+        app.extensions["collection_scheduler"] = overdue_scheduler
+        with (
+            mock.patch("server.metrics.now", return_value=datetime(2026, 9, 20, 9, 10, tzinfo=metrics.TZ)),
+            mock.patch("server.jobs.enqueue", return_value=7) as enqueue,
+        ):
+            server.configure_scheduler(app)
+        enqueue.assert_called_once_with("all", baseline_slot=None)
+        self.assertEqual(
+            overdue_scheduler.get_job("auto_collect").trigger.start_date,
+            datetime(2026, 9, 20, 10, 10, tzinfo=metrics.TZ),
         )
 
     def test_all_scope_is_deduped_union_and_excludes_paused(self):

@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -363,10 +364,18 @@ def configure_scheduler(app: Flask) -> None:
             )
 
     if cfg.get("auto_enabled") == "1":
+        interval = timedelta(minutes=int(cfg.get("auto_interval_minutes", "60")))
+        current = metrics.now()
+        last_run = metrics.timestamp(jobs.latest_successful_all_collection_at())
+        next_run = last_run + interval if last_run else current
+        if next_run <= current:
+            submit()
+            next_run = current + interval
         scheduler.add_job(
             submit,
             "interval",
-            minutes=int(cfg.get("auto_interval_minutes", "60")),
+            minutes=interval.total_seconds() / 60,
+            start_date=next_run,
             id="auto_collect",
             coalesce=True,
             max_instances=1,

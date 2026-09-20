@@ -214,6 +214,18 @@ def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
         ]
 
 
+def latest_successful_all_collection_at() -> str | None:
+    with closing(db.connect()) as conn:
+        row = conn.execute(
+            """
+            SELECT created_at FROM jobs
+            WHERE kind='collect' AND scope='all' AND status='success' AND is_midnight=0
+            ORDER BY id DESC LIMIT 1
+            """
+        ).fetchone()
+        return str(row["created_at"]) if row else None
+
+
 def cancel(job_id: int) -> None:
     with closing(db.connect()) as conn, conn:
         now = db.now_text()
