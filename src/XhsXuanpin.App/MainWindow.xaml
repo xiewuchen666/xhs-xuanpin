@@ -268,7 +268,7 @@
                         Margin="0"
                         IsEnabled="False"
                         Click="XhsAppToggleButton_Click"
-                        ToolTip="关闭小红书 App；MuMu、手机画面连接和后台采集保持运行"/>
+                        ToolTip="关闭小红书 App 和手机画面流；MuMu、ADB 和后台采集保持运行"/>
                 <TextBlock Grid.Column="2" x:Name="AndroidStatus" Text="Android · 正在连接" Foreground="#595959" FontSize="13"
                            VerticalAlignment="Center" HorizontalAlignment="Right"/>
             </Grid>

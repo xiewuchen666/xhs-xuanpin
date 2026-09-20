@@ -23,7 +23,9 @@ internal sealed class RuntimeCoordinator : IDisposable
     private bool _started;
     private bool _ownsPython;
     private bool _ownsScrcpy;
-    private readonly SemaphoreSlim _scrcpyRecoveryLock = new(1, 1);
+    private bool _scrcpySuspended;
+    private IntPtr _scrcpyJob;
+    private readonly SemaphoreSlim _scrcpyLifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _androidInputLock = new(1, 1);
     private DateTime _lastScrcpyRecoveryAttemptUtc;
 
@@ -87,12 +89,12 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     public async Task<bool> EnsureHealthyAsync(bool phoneVisible)
     {
-        if (!_started || IsScrcpyHealthy()) return false;
-        if (!await _scrcpyRecoveryLock.WaitAsync(0)) return false;
+        if (!_started || _scrcpySuspended || IsScrcpyHealthy()) return false;
+        if (!await _scrcpyLifecycleLock.WaitAsync(0)) return false;
 
         try
         {
-            if (IsScrcpyHealthy()) return false;
+            if (_scrcpySuspended || IsScrcpyHealthy()) return false;
             if (DateTime.UtcNow - _lastScrcpyRecoveryAttemptUtc < TimeSpan.FromSeconds(3)) return false;
             _lastScrcpyRecoveryAttemptUtc = DateTime.UtcNow;
 
@@ -108,7 +110,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         }
         finally
         {
-            _scrcpyRecoveryLock.Release();
+            _scrcpyLifecycleLock.Release();
         }
     }
 
@@ -333,37 +335,86 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     public async Task StopXhsAsync()
     {
-        if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
-        AppLogger.Info("Runtime", "Stopping Xiaohongshu app");
-        await RunAsync(_adb, "-s", Serial, "shell", "am", "force-stop", "com.xingin.xhs");
-        for (var i = 0; i < 20; i++)
+        await _scrcpyLifecycleLock.WaitAsync();
+        _scrcpySuspended = true;
+        try
         {
-            if (!await IsXhsRunningAsync())
+            if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
+            AppLogger.Info("Runtime", "Stopping Xiaohongshu app and suspending phone stream");
+            await RunAsync(_adb, "-s", Serial, "shell", "am", "force-stop", "com.xingin.xhs");
+            for (var i = 0; i < 20; i++)
             {
-                AppLogger.Info("Runtime", "Xiaohongshu app stopped");
-                return;
+                if (!await IsXhsRunningAsync())
+                {
+                    AppLogger.Info("Runtime", "Xiaohongshu app stopped");
+                    return;
+                }
+                await Task.Delay(100);
             }
-            await Task.Delay(100);
+            throw new InvalidOperationException("小红书未能在预期时间内停止");
         }
-        throw new InvalidOperationException("小红书未能在预期时间内停止");
+        finally
+        {
+            ResetScrcpyState(terminateRunningProcess: true);
+            if (await AdbReadyAsync())
+            {
+                try
+                {
+                    await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_SLEEP");
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Warning("Runtime", $"Android screen sleep failed: {ex.Message}");
+                }
+            }
+            AppLogger.Info("Runtime", "Phone stream suspended; MuMu and ADB remain available");
+            _scrcpyLifecycleLock.Release();
+        }
     }
 
     public async Task StartXhsAsync()
     {
-        if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
-        AppLogger.Info("Runtime", "Starting Xiaohongshu app");
-        await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
-        await RunAsync(_adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
-        for (var i = 0; i < 30; i++)
+        await _scrcpyLifecycleLock.WaitAsync();
+        try
         {
-            if (await IsXhsRunningAsync())
+            if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
+            AppLogger.Info("Runtime", "Starting phone stream and Xiaohongshu app");
+            await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
+            await EnsureScrcpyAsync();
+            await RunAsync(_adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
+            for (var i = 0; i < 30; i++)
             {
-                AppLogger.Info("Runtime", "Xiaohongshu app process started");
-                return;
+                if (await IsXhsRunningAsync())
+                {
+                    _scrcpySuspended = false;
+                    AppLogger.Info("Runtime", "Xiaohongshu app process and phone stream started");
+                    return;
+                }
+                await Task.Delay(100);
             }
-            await Task.Delay(100);
+            throw new InvalidOperationException("小红书未能在预期时间内启动");
         }
-        throw new InvalidOperationException("小红书未能在预期时间内启动");
+        catch
+        {
+            _scrcpySuspended = true;
+            ResetScrcpyState(terminateRunningProcess: true);
+            if (await AdbReadyAsync())
+            {
+                try
+                {
+                    await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_SLEEP");
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Warning("Runtime", $"Android screen sleep after failed start failed: {ex.Message}");
+                }
+            }
+            throw;
+        }
+        finally
+        {
+            _scrcpyLifecycleLock.Release();
+        }
     }
 
     private async Task EnsureReadableDensityAsync()
@@ -413,30 +464,6 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (_scrcpy is not null || _scrcpyWindow != IntPtr.Zero)
             ResetScrcpyState(terminateRunningProcess: true);
 
-        var existing = FindScrcpyWindow(processId: null);
-        if (existing != IntPtr.Zero)
-        {
-            NativeMethods.GetWindowThreadProcessId(existing, out var existingPid);
-            try
-            {
-                var process = Process.GetProcessById((int)existingPid);
-                if (process.ProcessName.Equals("scrcpy", StringComparison.OrdinalIgnoreCase))
-                {
-                    _scrcpy = process;
-                    _scrcpyWindow = existing;
-                    _ownsScrcpy = true;
-                    AttachScrcpyWindow();
-                    AppLogger.Info("Runtime", $"Reused existing scrcpy process; pid={process.Id}");
-                    return;
-                }
-                process.Dispose();
-            }
-            catch (ArgumentException)
-            {
-                // The process exited between enumeration and lookup; start a fresh instance below.
-            }
-        }
-
         var path = @"D:\Programs\scrcpy\scrcpy.exe";
         if (!File.Exists(path)) throw new InvalidOperationException("未找到 scrcpy");
 
@@ -463,6 +490,17 @@ internal sealed class RuntimeCoordinator : IDisposable
 
         _scrcpy = Process.Start(startInfo) ?? throw new InvalidOperationException("scrcpy 启动失败");
         _ownsScrcpy = true;
+        try
+        {
+            EnsureScrcpyJob();
+            if (!NativeMethods.AssignProcessToJobObject(_scrcpyJob, _scrcpy.Handle))
+                throw new InvalidOperationException($"scrcpy 进程托管失败，Win32 错误 {Marshal.GetLastPInvokeError()}");
+        }
+        catch
+        {
+            ResetScrcpyState(terminateRunningProcess: true);
+            throw;
+        }
         AppLogger.Info("Runtime", $"scrcpy process started; pid={_scrcpy.Id}");
         for (var i = 0; i < 80 && _scrcpyWindow == IntPtr.Zero; i++)
         {
@@ -496,6 +534,34 @@ internal sealed class RuntimeCoordinator : IDisposable
         return _phoneHost != IntPtr.Zero &&
                NativeMethods.IsWindow(_phoneHost) &&
                NativeMethods.GetParent(_scrcpyWindow) == _phoneHost;
+    }
+
+    private void EnsureScrcpyJob()
+    {
+        if (_scrcpyJob != IntPtr.Zero) return;
+
+        _scrcpyJob = NativeMethods.CreateJobObject(IntPtr.Zero, null);
+        if (_scrcpyJob == IntPtr.Zero)
+            throw new InvalidOperationException($"无法创建 scrcpy 进程托管，Win32 错误 {Marshal.GetLastPInvokeError()}");
+
+        var limits = new NativeMethods.JobObjectExtendedLimitInformation
+        {
+            BasicLimitInformation = new NativeMethods.JobObjectBasicLimitInformation
+            {
+                LimitFlags = NativeMethods.JobObjectLimitKillOnJobClose
+            }
+        };
+        if (!NativeMethods.SetInformationJobObject(
+                _scrcpyJob,
+                NativeMethods.JobObjectExtendedLimitInformationClass,
+                ref limits,
+                (uint)Marshal.SizeOf<NativeMethods.JobObjectExtendedLimitInformation>()))
+        {
+            var error = Marshal.GetLastPInvokeError();
+            NativeMethods.CloseHandle(_scrcpyJob);
+            _scrcpyJob = IntPtr.Zero;
+            throw new InvalidOperationException($"无法配置 scrcpy 进程托管，Win32 错误 {error}");
+        }
     }
 
     private void ResetScrcpyState(bool terminateRunningProcess)
@@ -563,13 +629,13 @@ internal sealed class RuntimeCoordinator : IDisposable
             throw new InvalidOperationException($"无法调整 scrcpy 子窗口尺寸，Win32 错误 {Marshal.GetLastPInvokeError()}");
     }
 
-    private static IntPtr FindScrcpyWindow(int? processId)
+    private static IntPtr FindScrcpyWindow(int processId)
     {
         IntPtr result = IntPtr.Zero;
         NativeMethods.EnumWindows((window, _) =>
         {
             NativeMethods.GetWindowThreadProcessId(window, out var pid);
-            if (processId.HasValue && pid != processId.Value) return true;
+            if (pid != processId) return true;
 
             var length = NativeMethods.GetWindowTextLength(window);
             if (length <= 0) return true;
@@ -649,6 +715,11 @@ internal sealed class RuntimeCoordinator : IDisposable
     {
         AppLogger.Info("Runtime", "Runtime disposal started");
         ResetScrcpyState(terminateRunningProcess: true);
+        if (_scrcpyJob != IntPtr.Zero)
+        {
+            NativeMethods.CloseHandle(_scrcpyJob);
+            _scrcpyJob = IntPtr.Zero;
+        }
         if (_ownsPython && _python is { HasExited: false }) _python.Kill(true);
         _python?.Dispose();
         AppLogger.Info("Runtime", "Runtime disposal completed");
@@ -657,6 +728,8 @@ internal sealed class RuntimeCoordinator : IDisposable
 
 internal static class NativeMethods
 {
+    internal const uint JobObjectLimitKillOnJobClose = 0x00002000;
+    internal const int JobObjectExtendedLimitInformationClass = 9;
     internal const int GwlStyle = -16, SwHide = 0, SwShow = 5;
     internal const int WhMouseLl = 14;
     internal const int WmLButtonDown = 0x0201, WmRButtonDown = 0x0204, WmMButtonDown = 0x0207;
@@ -692,6 +765,61 @@ internal static class NativeMethods
         internal int Width => Right - Left;
         internal int Height => Bottom - Top;
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JobObjectBasicLimitInformation
+    {
+        internal long PerProcessUserTimeLimit;
+        internal long PerJobUserTimeLimit;
+        internal uint LimitFlags;
+        internal UIntPtr MinimumWorkingSetSize;
+        internal UIntPtr MaximumWorkingSetSize;
+        internal uint ActiveProcessLimit;
+        internal UIntPtr Affinity;
+        internal uint PriorityClass;
+        internal uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct IoCounters
+    {
+        internal ulong ReadOperationCount;
+        internal ulong WriteOperationCount;
+        internal ulong OtherOperationCount;
+        internal ulong ReadTransferCount;
+        internal ulong WriteTransferCount;
+        internal ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JobObjectExtendedLimitInformation
+    {
+        internal JobObjectBasicLimitInformation BasicLimitInformation;
+        internal IoCounters IoInfo;
+        internal UIntPtr ProcessMemoryLimit;
+        internal UIntPtr JobMemoryLimit;
+        internal UIntPtr PeakProcessMemoryUsed;
+        internal UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr CreateJobObject(IntPtr securityAttributes, string? name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetInformationJobObject(
+        IntPtr job,
+        int informationClass,
+        ref JobObjectExtendedLimitInformation information,
+        uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CloseHandle(IntPtr handle);
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern IntPtr SetWindowsHookEx(int hookId, LowLevelMouseProc callback, IntPtr module, uint threadId);

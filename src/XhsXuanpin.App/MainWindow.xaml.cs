@@ -270,8 +270,8 @@ public partial class MainWindow : Window
         XhsAppToggleButton.IsEnabled = true;
         XhsAppToggleButton.Content = _xhsRunning ? "关闭小红书" : "启动小红书";
         XhsAppToggleButton.ToolTip = _xhsRunning
-            ? "关闭小红书 App；MuMu、手机画面连接和后台采集保持运行"
-            : "启动并唤醒小红书 App";
+            ? "关闭小红书 App 和手机画面流；MuMu、ADB 和后台采集保持运行"
+            : "唤醒 Android 并启动手机画面和小红书 App";
     }
 
     private void UpdatePhoneSurfaceMode(bool layoutChanged = false)
@@ -321,7 +321,7 @@ public partial class MainWindow : Window
                 _xhsLiveSurfaceReady = false;
                 UpdatePhoneSurfaceMode(layoutChanged: true);
                 BridgeTitle.Text = "正在关闭小红书";
-                BridgeStatus.Text = "后台监控采集继续运行";
+                BridgeStatus.Text = "正在停止手机画面流；后台监控采集继续运行";
                 await _runtime.StopXhsAsync();
                 _xhsRunning = false;
                 _xhsLiveSurfaceReady = false;
