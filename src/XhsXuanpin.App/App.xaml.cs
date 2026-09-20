@@ -39,6 +39,7 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        AppLogger.MarkSessionStarted();
         base.OnStartup(e);
     }
 
@@ -47,6 +48,7 @@ public partial class App : System.Windows.Application
         AppLogger.Info("App", $"Workbench exiting; code={e.ApplicationExitCode}");
         if (_ownsSingleInstanceMutex && _singleInstanceMutex is not null)
         {
+            AppLogger.MarkSessionEnded();
             _singleInstanceMutex.ReleaseMutex();
         }
         _singleInstanceMutex?.Dispose();

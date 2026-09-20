@@ -10,6 +10,7 @@ internal static class AppLogger
     private static readonly object Sync = new();
     private static readonly string LogDirectory = FindLogDirectory();
     private static readonly string LogPath = Path.Combine(LogDirectory, "app.log");
+    private static readonly string RunningMarkerPath = Path.Combine(LogDirectory, "app.running");
 
     public static string CurrentLogPath => LogPath;
 
@@ -21,6 +22,34 @@ internal static class AppLogger
 
     public static void Error(string source, string message, Exception? exception = null) =>
         Write("ERROR", source, message, exception);
+
+    public static void MarkSessionStarted()
+    {
+        try
+        {
+            Directory.CreateDirectory(LogDirectory);
+            if (File.Exists(RunningMarkerPath))
+                Warning("App", $"Previous workbench run ended unexpectedly; {File.ReadAllText(RunningMarkerPath).Trim()}");
+
+            File.WriteAllText(RunningMarkerPath, $"pid={Environment.ProcessId}; started={DateTimeOffset.Now:O}");
+        }
+        catch
+        {
+            // Session diagnostics must never make the workbench fail.
+        }
+    }
+
+    public static void MarkSessionEnded()
+    {
+        try
+        {
+            File.Delete(RunningMarkerPath);
+        }
+        catch
+        {
+            // Session diagnostics must never make the workbench fail.
+        }
+    }
 
     private static void Write(string level, string source, string message, Exception? exception)
     {
