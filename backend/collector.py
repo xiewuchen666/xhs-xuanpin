@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import threading
@@ -11,6 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PROFILE_DIR = Path(os.environ.get("XHS_XUANPIN_DATA_DIR", BASE_DIR.parent / "data")) / "browser_profile"
 COLLECT_LOCK = threading.Lock()
 DETAIL_API = "/api/store/jpd/edith/detail/h5/toc"
+logger = logging.getLogger(__name__)
 
 
 def parse_sales(text: str) -> dict[str, Any]:
@@ -103,10 +105,16 @@ def _pick_main_image(data: dict[str, Any]) -> str:
     return "https:" + url if url.startswith("//") else url
 
 
-def parse_detail_response(body: dict[str, Any], page_url: str = "") -> dict[str, Any] | None:
+def parse_detail_response(
+    body: dict[str, Any],
+    page_url: str = "",
+    diagnostics: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
     try:
         template_data = body.get("data", {}).get("template_data") or []
         if not template_data:
+            if diagnostics is not None:
+                diagnostics["reason"] = "响应缺少 data.template_data"
             return None
         data = template_data[0]
         desc = data.get("descriptionH5") or data.get("descriptionMain") or {}
@@ -144,8 +152,15 @@ def parse_detail_response(body: dict[str, Any], page_url: str = "") -> dict[str,
             "collector_version": "2.0",
             **parse_sales(str(price_h5.get("itemAnalysisDataText") or "")),
         }
-        return result if result["item_id"] and result["title"] else None
-    except Exception:
+        if not result["item_id"] or not result["title"]:
+            if diagnostics is not None:
+                missing = "商品标识" if not result["item_id"] else "商品标题"
+                diagnostics["reason"] = "响应缺少有效" + missing
+            return None
+        return result
+    except Exception as exc:
+        if diagnostics is not None:
+            diagnostics["reason"] = "响应结构解析异常：" + type(exc).__name__
         return None
 
 
@@ -186,6 +201,8 @@ def collect_product(url: str, timeout_ms: int = 30000) -> dict[str, Any]:
     with COLLECT_LOCK:
         captured: dict[str, Any] = {}
         last_status = None
+        detail_seen = False
+        parse_reason = ""
         with sync_playwright() as playwright:
             context = playwright.chromium.launch_persistent_context(
                 user_data_dir=str(PROFILE_DIR), channel="chrome", headless=True,
@@ -203,18 +220,27 @@ def collect_product(url: str, timeout_ms: int = 30000) -> dict[str, Any]:
                     route.continue_()
 
                 def on_response(response):
-                    nonlocal last_status
+                    nonlocal detail_seen, last_status, parse_reason
                     try:
                         validate_url(response.url)
                     except ValueError:
                         return
                     if DETAIL_API in response.url and "/variant" not in response.url:
+                        detail_seen = True
                         last_status = response.status
                         if response.status == 200:
-                            parsed = parse_detail_response(response.json(), page.url)
+                            diagnostics: dict[str, str] = {}
+                            try:
+                                body = response.json()
+                            except Exception as exc:
+                                parse_reason = "响应 JSON 解析失败：" + type(exc).__name__
+                                return
+                            parsed = parse_detail_response(body, page.url, diagnostics)
                             if parsed:
                                 parsed["observed_at"] = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
                                 captured.update(parsed)
+                            else:
+                                parse_reason = diagnostics.get("reason", "详情响应无法解析")
 
                 page.route("**/*", guard_navigation)
                 page.on("response", on_response)
@@ -230,11 +256,16 @@ def collect_product(url: str, timeout_ms: int = 30000) -> dict[str, Any]:
                         text = ""
                     if any(word in text for word in ("验证码", "安全验证", "异常访问", "请完成验证")):
                         raise RuntimeError("小红书要求人工安全验证，后台采集已停止，未尝试绕过验证")
+                    logger.warning(
+                        "Product detail capture failed: detail_seen=%s status=%s parse_reason=%s",
+                        detail_seen,
+                        last_status,
+                        parse_reason or ("未收到目标详情接口响应" if not detail_seen else "无"),
+                    )
                     if last_status and last_status != 200:
                         raise RuntimeError(f"商品详情接口返回 HTTP {last_status}")
-                    raise RuntimeError("未捕获到商品详情数据，可能是链接失效、登录态不足或页面接口发生变化")
+                    raise RuntimeError("未捕获到商品详情数据，可能是链接失效、网络波动或页面接口发生变化")
                 captured.update(_collect_shop_details(page, str(captured.get("shop_id") or "")))
                 return dict(captured)
             finally:
                 context.close()
-

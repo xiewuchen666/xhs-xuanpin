@@ -169,13 +169,17 @@ class PhaseThreeTests(unittest.TestCase):
         first = self.add_single("first")
         second = self.add_selection_only("second")
         job_id = jobs.enqueue("all")
+        attempts = {"first": 0, "second": 0}
 
         def fake_collect(url: str):
             if url.endswith("/first"):
-                raise RuntimeError("temporary collection failure")
+                attempts["first"] += 1
+                raise RuntimeError("未捕获到商品详情数据，可能是链接失效、登录态不足或页面接口发生变化")
+            attempts["second"] += 1
             return payload("second", "2026-09-18 11:00:00", 130)
 
-        self.assertTrue(jobs.process_next(fake_collect))
+        with mock.patch("jobs.time.sleep") as sleep:
+            self.assertTrue(jobs.process_next(fake_collect))
         job = jobs.get_job(job_id)
         self.assertEqual(job["status"], "partial")
         self.assertEqual(
@@ -184,7 +188,33 @@ class PhaseThreeTests(unittest.TestCase):
         )
         self.assertEqual(db.snapshot_count(first), 1)
         self.assertEqual(db.snapshot_count(second), 2)
-        self.assertEqual(db.get_product(first)["last_attempt_status"], "failed")
+        failed = db.get_product(first)
+        self.assertEqual(failed["last_attempt_status"], "failed")
+        self.assertNotEqual(failed["last_attempt_at"], failed["last_collected_at"])
+        failed_view = next(product for product in db.list_products() if product["id"] == first)
+        self.assertEqual(failed_view["health_label"], "采集失败")
+        self.assertEqual(attempts, {"first": 2, "second": 1})
+        sleep.assert_called_once_with(30)
+
+    def test_transient_product_failure_retries_after_30_seconds(self):
+        product_id = self.add_single("retry")
+        job_id = jobs.enqueue("all")
+        attempts = 0
+
+        def flaky(_url: str):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("temporary collection failure")
+            return payload("retry", "2026-09-18 11:00:00", 130)
+
+        with mock.patch("jobs.time.sleep") as sleep:
+            self.assertTrue(jobs.process_next(flaky))
+
+        self.assertEqual(jobs.get_job(job_id)["status"], "success")
+        self.assertEqual(db.snapshot_count(product_id), 2)
+        self.assertEqual(attempts, 2)
+        sleep.assert_called_once_with(30)
 
     def test_product_failure_log_redacts_url(self):
         self.add_single("redacted-log")
@@ -193,7 +223,10 @@ class PhaseThreeTests(unittest.TestCase):
         def fail_with_url(_url: str):
             raise RuntimeError("failed https://example.com/item?xsec_token=secret")
 
-        with self.assertLogs(jobs.logger, level="WARNING") as captured:
+        with (
+            mock.patch("jobs.time.sleep"),
+            self.assertLogs(jobs.logger, level="WARNING") as captured,
+        ):
             self.assertTrue(jobs.process_next(fail_with_url))
 
         output = "\n".join(captured.output)
@@ -208,13 +241,15 @@ class PhaseThreeTests(unittest.TestCase):
         def blocked(_url: str):
             raise RuntimeError("小红书要求人工安全验证")
 
-        self.assertTrue(jobs.process_next(blocked))
+        with mock.patch("jobs.time.sleep") as sleep:
+            self.assertTrue(jobs.process_next(blocked))
         job = jobs.get_job(job_id)
         self.assertEqual(job["status"], "blocked")
         self.assertEqual(
             [item["status"] for item in job["items"]],
             ["failed", "cancelled"],
         )
+        sleep.assert_not_called()
 
     def test_midnight_sample_is_marked_and_retry_is_ordinary(self):
         product_id = self.add_single("midnight")

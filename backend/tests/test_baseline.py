@@ -27,6 +27,10 @@ class CollectorParserTests(unittest.TestCase):
         result = collector.parse_detail_response(body)
         self.assertEqual((result["item_id"], result["price"], result["total_sales"]), ("sku-1", 24.9, 100))
 
+        diagnostics = {}
+        self.assertIsNone(collector.parse_detail_response({}, diagnostics=diagnostics))
+        self.assertEqual(diagnostics["reason"], "响应缺少 data.template_data")
+
 
 class DatabaseTests(unittest.TestCase):
     def setUp(self):

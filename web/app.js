@@ -224,9 +224,15 @@ function productToolbar(products) {
 
 function metricNumber(product, key) {
   if (key === 'sales') return product.total_sales == null ? Number.NEGATIVE_INFINITY : Number(product.total_sales);
-  if (key === 'updated') return Date.parse(String(product.last_collected_at || '').replace(' ', 'T')) || 0;
+  if (key === 'updated') return Date.parse(String(productUpdateTime(product)).replace(' ', 'T')) || 0;
   const value = product[key]?.value;
   return value == null ? Number.NEGATIVE_INFINITY : Number(value);
+}
+
+function productUpdateTime(product) {
+  return product.last_attempt_status === 'failed'
+    ? (product.last_attempt_at || product.last_collected_at || '')
+    : (product.last_collected_at || '');
 }
 
 function filterAndSortProducts(products) {
@@ -273,7 +279,7 @@ function productRow(product, context) {
       '<td class="num">' + monitoredMetricCell(product.today, true) + '</td>' +
       '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
       '<td class="num">' + incrementCell(product.increment) + '</td>' +
-      '<td><span>' + esc(product.last_collected_at || '—') + '</span></td>' +
+      '<td><span>' + esc(productUpdateTime(product) || '—') + '</span></td>' +
       '<td><span class="status ' + (paused ? 'paused' : (product.health || 'active')) + '">' +
         esc(paused ? '● 已暂停' : ('● ' + (product.health_label || '正常'))) + '</span></td>' +
       '<td><div class="actions">' + trendButton + '<button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
@@ -462,7 +468,7 @@ function shopProductRow(product) {
     '<td class="num">' + monitoredMetricCell(product.today, true) + '</td>' +
     '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
     '<td class="num">' + incrementCell(product.increment) + '</td>' +
-    '<td>' + esc(product.last_collected_at || '—') + '</td>' +
+    '<td>' + esc(productUpdateTime(product) || '—') + '</td>' +
     '<td><button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
       'data-more-product-id="' + product.id + '" data-more-title="' + esc(product.title) + '" ' +
       'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" ' +
@@ -616,7 +622,7 @@ function productExportRow(product) {
     rolling24_basis: rolling24Basis(product.rolling24),
     increment: exportMetric(product.increment),
     interval_hours: roundedIntervalHours(product.increment),
-    updated_at: product.last_collected_at || '',
+    updated_at: productUpdateTime(product),
     status: product.monitor_state === 'paused' ? '已暂停' : (product.health_label || '正常')
   };
 }
@@ -654,7 +660,7 @@ function shopExportRows(shops) {
         rolling24_basis: rolling24Basis(product.rolling24),
         increment: exportMetric(product.increment),
         interval_hours: roundedIntervalHours(product.increment),
-        updated_at: product.last_collected_at || '',
+        updated_at: productUpdateTime(product),
         product_status: product.monitor_state === 'paused' ? '已暂停' : (product.health_label || '正常')
       });
     });

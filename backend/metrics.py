@@ -401,7 +401,7 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     elif p.get("monitor_state") == "paused":
         p["health"], p["health_label"] = "muted", "已暂停"
     elif failed:
-        p["health"], p["health_label"] = "danger", "最近采集失败"
+        p["health"], p["health_label"] = "danger", "采集失败"
     elif latest_counter_state == "pending_drop":
         p["health"], p["health_label"] = "warning", "销量回落待确认"
     elif latest_counter_state == "reset_baseline":

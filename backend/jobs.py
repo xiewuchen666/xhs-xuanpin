@@ -7,6 +7,7 @@ coalesced.
 import logging
 import re
 import threading
+import time
 from contextlib import closing
 from datetime import datetime, timedelta
 from typing import Any
@@ -18,10 +19,18 @@ logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"success", "partial", "failed", "blocked", "cancelled", "interrupted"}
 BASELINE_SLOTS = {"2355", "0000", "0005", "0010"}
+RETRY_DELAY_SECONDS = 30
 
 
 def safe_error(exc: Exception) -> str:
     return re.sub(r"https?://\S+", "[链接]", str(exc))[:800] or type(exc).__name__
+
+
+def requires_verification(message: str) -> bool:
+    return any(
+        term in message
+        for term in ("人工安全验证", "验证码", "安全验证", "异常访问", "请完成验证")
+    )
 
 
 def enqueue(
@@ -365,7 +374,26 @@ def process_next(collect_fn=None) -> bool:
                         )
                     continue
 
-            data = collect_fn(str(item["url"]))
+            try:
+                data = collect_fn(str(item["url"]))
+            except Exception as first_error:
+                first_message = safe_error(first_error)
+                if requires_verification(first_message):
+                    raise
+                logger.warning(
+                    "Job item first attempt failed; retrying in %ss: job=%s item=%s reason=%s",
+                    RETRY_DELAY_SECONDS,
+                    job["id"],
+                    item["id"],
+                    first_message,
+                )
+                time.sleep(RETRY_DELAY_SECONDS)
+                data = collect_fn(str(item["url"]))
+                logger.info(
+                    "Job item retry succeeded: job=%s item=%s",
+                    job["id"],
+                    item["id"],
+                )
 
             if job["kind"] == "import":
                 existing = db.get_product_by_item_id(
@@ -454,13 +482,10 @@ def process_next(collect_fn=None) -> bool:
                     """,
                     (message, db.now_text(), item["id"]),
                 )
-            if any(
-                term in message
-                for term in ("人工安全验证", "验证码", "安全验证", "登录态不足")
-            ):
+            if requires_verification(message):
                 blocked = True
                 logger.error(
-                    "Job blocked by verification/login requirement: job=%s item=%s reason=%s",
+                    "Job blocked by verification requirement: job=%s item=%s reason=%s",
                     job["id"],
                     item["id"],
                     message,
