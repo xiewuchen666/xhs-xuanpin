@@ -328,7 +328,7 @@ class PhaseOneApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/selection").get_json()[0]["id"], self.product_id)
         self.assertEqual(db.snapshot_count(self.product_id), 1)
 
-    def test_product_trend_api_only_serves_single_monitor_products(self):
+    def test_product_trend_api_serves_every_monitor_scope(self):
         response = self.client.get(f"/api/products/{self.product_id}/trend")
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
@@ -336,7 +336,21 @@ class PhaseOneApiTests(unittest.TestCase):
         self.assertEqual(len(body["daily"]), 30)
         self.assertIn("hourly", body)
 
+        db.add_selection(self.product_id)
         db.remove_single_monitor(self.product_id)
+        self.assertEqual(
+            self.client.get(f"/api/products/{self.product_id}/trend").status_code,
+            200,
+        )
+
+        db.remove_selection(self.product_id)
+        db.add_shop_monitor(self.product_id)
+        self.assertEqual(
+            self.client.get(f"/api/products/{self.product_id}/trend").status_code,
+            200,
+        )
+
+        db.remove_shop_monitor(self.product_id)
         self.assertEqual(
             self.client.get(f"/api/products/{self.product_id}/trend").status_code,
             404,

@@ -261,10 +261,8 @@ function productRow(product, context) {
   const image = product.image_url
     ? '<img src="' + esc(product.image_url) + '" alt="" referrerpolicy="no-referrer">'
     : '<img alt="">';
-  const trendButton = context === 'single'
-    ? '<button class="trend-btn" type="button" aria-label="查看成交趋势" title="成交趋势" data-trend-product-id="' + product.id + '">' +
-      '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 15.5V4.5M3 15.5h14M5.5 12l3-3 2.5 2 4-5"/></svg></button>'
-    : '';
+  const trendButton = '<button class="trend-btn" type="button" aria-label="查看成交趋势" title="成交趋势" data-trend-product-id="' + product.id + '">' +
+    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 15.5V4.5M3 15.5h14M5.5 12l3-3 2.5 2 4-5"/></svg></button>';
   return '<tr data-product-id="' + product.id + '">' +
       '<td><div class="product">' + image + '<div class="copy">' +
       '<a class="product-title-link" href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer" title="' + esc(product.title) + '">' + esc(product.title) + '</a>' +
@@ -466,10 +464,12 @@ function shopProductRow(product) {
     '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
     '<td class="num">' + incrementCell(product.increment) + '</td>' +
     '<td>' + esc(productUpdateTime(product) || '—') + '</td>' +
-    '<td><button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
+    '<td><div class="actions"><button class="trend-btn" type="button" aria-label="查看成交趋势" title="成交趋势" data-trend-product-id="' + product.id + '">' +
+      '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 15.5V4.5M3 15.5h14M5.5 12l3-3 2.5 2 4-5"/></svg></button>' +
+      '<button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
       'data-more-product-id="' + product.id + '" data-more-title="' + esc(product.title) + '" ' +
       'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" ' +
-      'data-more-shop="1" data-more-context="shop">···</button></td>' +
+      'data-more-shop="1" data-more-context="shop">···</button></div></td>' +
     '</tr>';
 }
 

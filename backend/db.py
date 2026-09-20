@@ -449,8 +449,11 @@ def get_product_trend(product_id: int, as_of=None) -> dict[str, Any] | None:
             """
             SELECT p.*
             FROM products p
-            JOIN single_monitor_products sm ON sm.product_id=p.id
-            WHERE p.id=?
+            WHERE p.id=? AND (
+              EXISTS(SELECT 1 FROM single_monitor_products sm WHERE sm.product_id=p.id)
+              OR EXISTS(SELECT 1 FROM shop_monitor_products sh WHERE sh.product_id=p.id)
+              OR EXISTS(SELECT 1 FROM selection_pool_products sp WHERE sp.product_id=p.id)
+            )
             """,
             (product_id,),
         ).fetchone()
