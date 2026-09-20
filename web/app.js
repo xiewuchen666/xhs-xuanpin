@@ -107,6 +107,24 @@ function metricCell(metric, positiveAccent = false) {
   return '<span class="' + valueClass + '" title="' + reason + '">' + display + '</span>';
 }
 
+function monitoredDuration(metric) {
+  const hours = Number(metric?.hours);
+  return !Number.isFinite(hours) || hours < 1
+    ? '不足1小时'
+    : (Math.round(hours * 10) / 10).toLocaleString('zh-CN') + '小时';
+}
+
+function monitoredMetricCell(metric, positiveAccent = false) {
+  const base = metricCell(metric, positiveAccent);
+  if (!metric?.partial || metric.value == null) return base;
+  return base + '<small class="metric-hint">加入后 · 已监控' + esc(monitoredDuration(metric)) + '</small>';
+}
+
+function rolling24Basis(metric) {
+  if (metric?.value == null) return '';
+  return metric.partial ? '加入后 · 已监控' + monitoredDuration(metric) : '完整24小时';
+}
+
 function totalSalesCell(product) {
   if (product.total_sales == null) {
     return '<span class="metric-value">—</span><small class="metric-hint">待有效采样</small>';
@@ -130,7 +148,10 @@ function incrementCell(metric) {
 }
 
 function summaryMetric(products, key) {
-  const values = products.map(p => metricValue(p[key])).filter(v => v != null);
+  const values = products
+    .filter(p => key !== 'rolling24' || !p[key]?.partial)
+    .map(p => metricValue(p[key]))
+    .filter(v => v != null);
   if (!values.length) return '—';
   return formatSales(values.reduce((sum, value) => sum + value, 0));
 }
@@ -210,7 +231,10 @@ function filterAndSortProducts(products) {
   });
 
   const sortKey = sort?.value || 'rolling24_desc';
-  if (sortKey === 'rolling24_desc') result.sort((a,b) => metricNumber(b,'rolling24') - metricNumber(a,'rolling24'));
+  if (sortKey === 'rolling24_desc') result.sort((a,b) => {
+    const rank = product => product.rolling24?.value == null ? 2 : (product.rolling24?.partial ? 1 : 0);
+    return rank(a) - rank(b) || metricNumber(b,'rolling24') - metricNumber(a,'rolling24');
+  });
   else if (sortKey === 'today_desc') result.sort((a,b) => metricNumber(b,'today') - metricNumber(a,'today'));
   else if (sortKey === 'sales_desc') result.sort((a,b) => metricNumber(b,'sales') - metricNumber(a,'sales'));
   else result.sort((a,b) => metricNumber(b,'updated') - metricNumber(a,'updated'));
@@ -232,8 +256,8 @@ function productRow(product, context) {
       '</div></div></td>' +
       '<td class="num">' + formatPrice(product.price) + '</td>' +
       '<td class="num">' + totalSalesCell(product) + '</td>' +
-      '<td class="num">' + metricCell(product.today, true) + '</td>' +
-      '<td class="num">' + metricCell(product.rolling24, true) + '</td>' +
+      '<td class="num">' + monitoredMetricCell(product.today, true) + '</td>' +
+      '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
       '<td class="num">' + incrementCell(product.increment) + '</td>' +
       '<td><span>' + esc(product.last_collected_at || '—') + '</span></td>' +
       '<td><span class="status ' + (paused ? 'paused' : (product.health || 'active')) + '">' +
@@ -421,8 +445,8 @@ function shopProductRow(product) {
     '<span>' + (paused ? '已暂停监控' : '商品监控中') + '</span></div></div></td>' +
     '<td class="num">' + formatPrice(product.price) + '</td>' +
     '<td class="num">' + totalSalesCell(product) + '</td>' +
-    '<td class="num">' + metricCell(product.today, true) + '</td>' +
-    '<td class="num">' + metricCell(product.rolling24, true) + '</td>' +
+    '<td class="num">' + monitoredMetricCell(product.today, true) + '</td>' +
+    '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
     '<td class="num">' + incrementCell(product.increment) + '</td>' +
     '<td>' + esc(product.last_collected_at || '—') + '</td>' +
     '<td><button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
@@ -575,6 +599,7 @@ function productExportRow(product) {
     total_sales: product.total_sales == null ? null : Number(product.total_sales),
     today: exportMetric(product.today),
     rolling24: exportMetric(product.rolling24),
+    rolling24_basis: rolling24Basis(product.rolling24),
     increment: exportMetric(product.increment),
     interval_hours: roundedIntervalHours(product.increment),
     updated_at: product.last_collected_at || '',
@@ -612,6 +637,7 @@ function shopExportRows(shops) {
         total_sales: product.total_sales == null ? null : Number(product.total_sales),
         today: exportMetric(product.today),
         rolling24: exportMetric(product.rolling24),
+        rolling24_basis: rolling24Basis(product.rolling24),
         increment: exportMetric(product.increment),
         interval_hours: roundedIntervalHours(product.increment),
         updated_at: product.last_collected_at || '',

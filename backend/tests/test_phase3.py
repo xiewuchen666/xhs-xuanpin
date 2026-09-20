@@ -80,7 +80,13 @@ class PhaseThreeTests(unittest.TestCase):
         server.configure_scheduler(app)
         self.assertEqual(
             {scheduled.id for scheduled in scheduler.get_jobs()},
-            {"auto_collect", "midnight_collect"},
+            {
+                "auto_collect",
+                "midnight_collect_2355",
+                "midnight_collect_0000",
+                "midnight_collect_0005",
+                "midnight_collect_0010",
+            },
         )
 
     def test_all_scope_is_deduped_union_and_excludes_paused(self):
@@ -94,6 +100,16 @@ class PhaseThreeTests(unittest.TestCase):
         job_id = jobs.enqueue("all")
         item_ids = [item["product_id"] for item in jobs.get_job(job_id)["items"]]
         self.assertEqual(item_ids, [shared, selection_only, shop_only])
+
+    def test_distinct_midnight_slots_are_queued_separately(self):
+        self.add_single("dense-midnight")
+
+        first = jobs.enqueue("all", baseline_slot="2355")
+        second = jobs.enqueue("all", baseline_slot="0000")
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(jobs.get_job(first)["baseline_slot"], "2355")
+        self.assertEqual(jobs.get_job(second)["baseline_slot"], "0000")
 
     def test_queued_item_is_rechecked_and_skipped_after_pause(self):
         product_id = self.add_single("pause-after-queue")
@@ -160,16 +176,21 @@ class PhaseThreeTests(unittest.TestCase):
 
     def test_midnight_sample_is_marked_and_retry_is_ordinary(self):
         product_id = self.add_single("midnight")
-        job_id = jobs.enqueue("all", is_midnight=True)
+        job_id = jobs.enqueue("all", is_midnight=True, baseline_slot="2355")
+        with closing(db.connect()) as conn, conn:
+            conn.execute(
+                "UPDATE jobs SET created_at='2026-09-18 23:55:00' WHERE id=?",
+                (job_id,),
+            )
         self.assertTrue(
             jobs.process_next(
-                lambda _url: payload("midnight", "2026-09-19 00:00:01", 120)
+                lambda _url: payload("midnight", "2026-09-18 23:55:01", 120)
             )
         )
         with closing(db.connect()) as conn:
             latest = conn.execute(
                 """
-                SELECT is_midnight,baseline_day
+                SELECT is_midnight,baseline_day,baseline_slot
                 FROM snapshots
                 WHERE product_id=?
                 ORDER BY id DESC LIMIT 1
@@ -177,7 +198,8 @@ class PhaseThreeTests(unittest.TestCase):
                 (product_id,),
             ).fetchone()
         self.assertEqual(latest["is_midnight"], 1)
-        self.assertEqual(latest["baseline_day"], jobs.get_job(job_id)["created_at"][:10])
+        self.assertEqual(latest["baseline_day"], "2026-09-19")
+        self.assertEqual(latest["baseline_slot"], "2355")
 
         another = self.add_single("interrupted")
         interrupted_job = jobs.enqueue("all", product_ids=[another], is_midnight=True)

@@ -115,6 +115,7 @@ def init_db() -> None:
         snapshot_additions = {
             "is_midnight": "INTEGER NOT NULL DEFAULT 0",
             "baseline_day": "TEXT",
+            "baseline_slot": "TEXT",
         }
         for name, declaration in snapshot_additions.items():
             if name not in snapshot_columns:
@@ -151,6 +152,9 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status,id);
             CREATE INDEX IF NOT EXISTS idx_job_items_job ON job_items(job_id,id);
         """)
+        job_columns = _columns(conn, "jobs")
+        if "baseline_slot" not in job_columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN baseline_slot TEXT")
         defaults = {
             "auto_enabled": "1",
             "auto_interval_minutes": "60",
@@ -332,6 +336,7 @@ def persist(
     expected_product_id: int | None = None,
     is_midnight: bool = False,
     baseline_day: str | None = None,
+    baseline_slot: str | None = None,
 ) -> int:
     item_id, title, observed, precision, total_sales = _normalize_collection(data)
 
@@ -397,8 +402,9 @@ def persist(
         )
         conn.execute("""
             INSERT INTO snapshots(
-              product_id,collected_at,price,total_sales,sales_raw,sales_precision,is_midnight,baseline_day
-            ) VALUES(?,?,?,?,?,?,?,?)
+              product_id,collected_at,price,total_sales,sales_raw,sales_precision,
+              is_midnight,baseline_day,baseline_slot
+            ) VALUES(?,?,?,?,?,?,?,?,?)
         """, (
             product_id,
             observed,
@@ -408,6 +414,7 @@ def persist(
             precision,
             int(is_midnight),
             baseline_day if is_midnight else None,
+            baseline_slot if is_midnight else None,
         ))
 
         if join_single:
@@ -548,9 +555,18 @@ def list_selection_products(as_of=None) -> list[dict[str, Any]]:
         return _enrich_rows(conn, rows, as_of=as_of)
 
 
-def _aggregate_metric(products: list[dict[str, Any]], key: str) -> dict[str, Any]:
+def _aggregate_metric(
+    products: list[dict[str, Any]],
+    key: str,
+    *,
+    include_partial: bool = True,
+) -> dict[str, Any]:
     metric_rows = [product.get(key) or {} for product in products]
-    valid = [metric for metric in metric_rows if metric.get("value") is not None]
+    valid = [
+        metric
+        for metric in metric_rows
+        if metric.get("value") is not None and (include_partial or not metric.get("partial"))
+    ]
     approximate = any(metric.get("quality") == "approximate" for metric in valid)
     return {
         "value": sum(int(metric.get("value") or 0) for metric in valid) if valid else None,
@@ -641,7 +657,7 @@ def list_shops(as_of=None) -> list[dict[str, Any]]:
             "product_count": len(items),
             "active_count": sum(1 for item in items if item.get("monitor_state") == "active"),
             "today": _aggregate_metric(items, "today"),
-            "rolling24": _aggregate_metric(items, "rolling24"),
+            "rolling24": _aggregate_metric(items, "rolling24", include_partial=False),
             "last_collected_at": latest,
             "health": health,
             "health_label": health_label,

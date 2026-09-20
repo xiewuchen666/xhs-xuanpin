@@ -49,6 +49,38 @@ def exact_counter(row: Optional[Dict[str, Any]]) -> bool:
     return bool(row and row.get("sales_precision") == "exact" and row.get("total_sales") is not None and row.get("_time"))
 
 
+def midnight_actions(rows: List[Dict[str, Any]]) -> Dict[int, str]:
+    """Hold dense midnight drops until 00:10 or a recovery confirms 23:55."""
+    groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for row in rows:
+        day = str(row.get("baseline_day") or "")
+        slot = str(row.get("baseline_slot") or "")
+        if day and slot and exact_counter(row):
+            groups.setdefault(day, {})[slot] = row
+
+    actions: Dict[int, str] = {}
+    for slots in groups.values():
+        before, at_midnight = slots.get("2355"), slots.get("0000")
+        if not before or not at_midnight or int(at_midnight["total_sales"]) >= int(before["total_sales"]):
+            continue
+
+        validators = [slots[slot] for slot in ("0005", "0010") if slot in slots]
+        recovered = next(
+            (row for row in validators if int(row["total_sales"]) >= int(before["total_sales"])),
+            None,
+        )
+        if recovered:
+            for row in [at_midnight, *validators]:
+                if row["_time"] < recovered["_time"] and int(row["total_sales"]) < int(before["total_sales"]):
+                    actions[id(row)] = "ignore"
+        elif "0010" not in slots:
+            for row in [at_midnight, *validators]:
+                actions[id(row)] = "hold"
+        else:
+            actions[id(at_midnight)] = "reset"
+    return actions
+
+
 def resolve_counter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Classify exact counter readings without rewriting raw snapshots.
 
@@ -59,12 +91,29 @@ def resolve_counter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     new baseline segment.
     """
     resolved = [dict(row) for row in rows]
+    actions = midnight_actions(resolved)
     stable: Optional[Dict[str, Any]] = None
     pending: Optional[Dict[str, Any]] = None
     segment = 0
 
     for row in resolved:
         if not exact_counter(row):
+            continue
+        action = actions.get(id(row))
+        if action == "ignore":
+            row["_counter_state"] = "ignored_drop"
+            row["_counter_segment"] = segment
+            continue
+        if action == "hold":
+            row["_counter_state"] = "pending_drop"
+            row["_counter_segment"] = segment
+            continue
+        if action == "reset" and stable is not None:
+            segment += 1
+            row["_counter_state"] = "reset_baseline"
+            row["_counter_segment"] = segment
+            stable = row
+            pending = None
             continue
         value = int(row["total_sales"])
         if stable is None:
@@ -194,6 +243,26 @@ def window_metric(
     return interval(left, right, rows, left["_time"] != start or right["_time"] != end)
 
 
+def joined_metric(
+    rows: List[Dict[str, Any]],
+    effective: List[Dict[str, Any]],
+    latest: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not rows or not effective or not latest or rows[0] is not effective[0]:
+        return missing("首次采集不是可用于差分的精确销量")
+    first = effective[0]
+    if latest.get("_counter_state") != "stable" or first.get("_counter_segment") != 0 or latest.get("_counter_segment") != 0:
+        return missing("加入后区间存在销量回落或基线重置")
+    result = interval(first, latest, rows)
+    if result["value"] is not None:
+        result.update(
+            partial=True,
+            partial_label="加入后",
+            reason="监控未满完整统计窗口；按加入后的首次采集计算",
+        )
+    return result
+
+
 def recent_increment(
     rows: List[Dict[str, Any]],
     effective: List[Dict[str, Any]],
@@ -257,6 +326,10 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     p["age_minutes"] = round(age) if age is not None else None
     midnight = datetime.combine(current.date(), datetime.min.time(), tzinfo=TZ)
     today = boundary_metric(rows, effective, midnight, latest, day_tolerance)
+    if today["value"] is None and rows and rows[0]["_time"] >= midnight:
+        joined_today = joined_metric(rows, effective, latest)
+        if joined_today["value"] is not None:
+            today = joined_today
     y_start = nearest(effective, midnight - timedelta(days=1), day_tolerance, current)
     y_end = nearest(effective, midnight, day_tolerance, current)
     yesterday = (
@@ -278,13 +351,18 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     )
     increment = recent_increment(rows, effective, latest)
     window_end = latest["_time"] if latest else current
-    rolling = window_metric(
-        rows,
-        effective,
-        window_end - timedelta(hours=24),
-        window_end,
-        window_tolerance,
-        current,
+    history_hours = (window_end - rows[0]["_time"]).total_seconds() / 3600 if rows and latest else 0
+    rolling = (
+        joined_metric(rows, effective, latest)
+        if history_hours < 24
+        else window_metric(
+            rows,
+            effective,
+            window_end - timedelta(hours=24),
+            window_end,
+            window_tolerance,
+            current,
+        )
     )
     prior = window_metric(
         rows,

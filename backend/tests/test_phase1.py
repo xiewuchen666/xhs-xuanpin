@@ -61,6 +61,74 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertEqual(result["rolling24"]["value"], 50)
         self.assertEqual(result["rolling24"]["to_time"], "2026-09-18 10:00:00")
 
+    def test_new_product_uses_first_sample_until_full_day_exists(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-18 18:00:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-18 10:00:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-18 18:00:00", "total_sales": 125, "sales_raw": "已售125", "sales_precision": "exact", "price": 10},
+        ]
+
+        partial = metrics.enrich(product, snapshots, as_of="2026-09-18 18:00:00")
+
+        self.assertEqual(partial["today"]["value"], 25)
+        self.assertTrue(partial["today"]["partial"])
+        self.assertEqual(partial["rolling24"]["value"], 25)
+        self.assertTrue(partial["rolling24"]["partial"])
+        self.assertEqual(partial["rolling24"]["hours"], 8)
+
+        snapshots.append(
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-19 10:00:00", "total_sales": 150, "sales_raw": "已售150", "sales_precision": "exact", "price": 10}
+        )
+        product["last_collected_at"] = "2026-09-19 10:00:00"
+        full_day = metrics.enrich(product, snapshots, as_of="2026-09-19 10:00:00")
+
+        self.assertEqual(full_day["rolling24"]["value"], 50)
+        self.assertFalse(full_day["rolling24"].get("partial", False))
+
+    def test_midnight_drop_waits_for_dense_samples_then_uses_2355_after_recovery(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-19 00:05:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-18 23:55:00", "total_sales": 8707, "sales_raw": "已售8707", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "2355"},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-19 00:00:00", "total_sales": 8573, "sales_raw": "已售8573", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0000"},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-19 00:05:00", "total_sales": 8580, "sales_raw": "已售8580", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0005"},
+        ]
+
+        waiting = metrics.enrich(product, snapshots, as_of="2026-09-19 00:05:00")
+        self.assertIsNone(waiting["today"]["value"])
+        self.assertEqual(waiting["counter_state"], "pending_drop")
+
+        snapshots.append(
+            {"id": 4, "product_id": 1, "collected_at": "2026-09-19 00:10:00", "total_sales": 8711, "sales_raw": "已售8711", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0010"}
+        )
+        product["last_collected_at"] = "2026-09-19 00:10:00"
+        recovered = metrics.enrich(product, snapshots, as_of="2026-09-19 00:10:00")
+
+        self.assertEqual(recovered["today"]["value"], 4)
+        self.assertEqual(recovered["today"]["from_time"], "2026-09-18 23:55:00")
+        self.assertEqual(recovered["counter_state"], "stable")
+
+    def test_midnight_uses_0000_when_it_does_not_drop_or_recover_by_0010(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-19 00:10:00"}
+
+        no_drop = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-18 23:55:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "2355"},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-19 00:00:00", "total_sales": 102, "sales_raw": "已售102", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0000"},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-19 00:10:00", "total_sales": 105, "sales_raw": "已售105", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0010"},
+        ]
+        normal = metrics.enrich(product, no_drop, as_of="2026-09-19 00:10:00")
+        self.assertEqual(normal["today"]["value"], 3)
+        self.assertEqual(normal["today"]["from_time"], "2026-09-19 00:00:00")
+
+        persistent_drop = [
+            {**no_drop[0], "total_sales": 8707, "sales_raw": "已售8707"},
+            {**no_drop[1], "total_sales": 8573, "sales_raw": "已售8573"},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-19 00:05:00", "total_sales": 8580, "sales_raw": "已售8580", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0005"},
+            {**no_drop[2], "id": 4, "total_sales": 8590, "sales_raw": "已售8590"},
+        ]
+        reset = metrics.enrich(product, persistent_drop, as_of="2026-09-19 00:10:00")
+        self.assertEqual(reset["today"]["value"], 17)
+        self.assertEqual(reset["today"]["from_time"], "2026-09-19 00:00:00")
+
     def test_lower_bound_sales_are_not_faked_into_growth(self):
         product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-18 10:00:00"}
         snapshots = [

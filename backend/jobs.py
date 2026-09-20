@@ -8,6 +8,7 @@ import logging
 import re
 import threading
 from contextlib import closing
+from datetime import datetime, timedelta
 from typing import Any
 
 import collector as collector_module
@@ -16,6 +17,7 @@ import db
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"success", "partial", "failed", "blocked", "cancelled", "interrupted"}
+BASELINE_SLOTS = {"2355", "0000", "0005", "0010"}
 
 
 def safe_error(exc: Exception) -> str:
@@ -29,12 +31,19 @@ def enqueue(
     urls: list[str] | None = None,
     kind: str = "collect",
     is_midnight: bool = False,
+    baseline_slot: str | None = None,
     parent_id: int | None = None,
 ) -> int:
     if scope not in {"all", "single", "shop", "selection"}:
         raise ValueError("无效采集范围")
     if kind not in {"collect", "import"}:
         raise ValueError("无效任务类型")
+    if baseline_slot is not None and baseline_slot not in BASELINE_SLOTS:
+        raise ValueError("无效午夜基线采样时点")
+    if baseline_slot is not None:
+        is_midnight = True
+    elif is_midnight:
+        baseline_slot = "0000"
 
     if kind == "import":
         if scope == "all":
@@ -61,7 +70,7 @@ def enqueue(
         conn.execute("BEGIN IMMEDIATE")
         active = conn.execute(
             """
-            SELECT i.product_id,i.url,i.job_id,j.kind,j.scope
+            SELECT i.product_id,i.url,i.job_id,j.kind,j.scope,j.is_midnight,j.baseline_slot
             FROM job_items i
             JOIN jobs j ON j.id=i.job_id
             WHERE j.status IN ('queued','running')
@@ -74,6 +83,14 @@ def enqueue(
                 for row in active
                 if row["kind"] == "import" and row["scope"] == scope
             ]
+        elif is_midnight:
+            active = [
+                row
+                for row in active
+                if bool(row["is_midnight"]) and row["baseline_slot"] == baseline_slot
+            ]
+        else:
+            active = [row for row in active if not bool(row["is_midnight"])]
         active_ids = {int(row["product_id"]) for row in active if row["product_id"] is not None}
         active_urls = {str(row["url"]) for row in active}
         filtered = [
@@ -106,10 +123,10 @@ def enqueue(
         job_id = int(
             conn.execute(
                 """
-                INSERT INTO jobs(kind,scope,created_at,is_midnight,parent_id)
-                VALUES(?,?,?,?,?)
+                INSERT INTO jobs(kind,scope,created_at,is_midnight,baseline_slot,parent_id)
+                VALUES(?,?,?,?,?,?)
                 """,
-                (kind, scope, db.now_text(), int(is_midnight), parent_id),
+                (kind, scope, db.now_text(), int(is_midnight), baseline_slot, parent_id),
             ).lastrowid
         )
         conn.executemany(
@@ -117,12 +134,13 @@ def enqueue(
             [(job_id, product_id, url) for product_id, url in filtered],
         )
         logger.info(
-            "Job queued: job=%s kind=%s scope=%s items=%s midnight=%s parent=%s",
+            "Job queued: job=%s kind=%s scope=%s items=%s midnight=%s slot=%s parent=%s",
             job_id,
             kind,
             scope,
             len(filtered),
             is_midnight,
+            baseline_slot,
             parent_id,
         )
         return job_id
@@ -253,6 +271,13 @@ def retry(job_id: int) -> int:
     )
 
 
+def baseline_day(created_at: str, slot: str | None) -> str:
+    day = datetime.fromisoformat(created_at).date()
+    if slot == "2355":
+        day += timedelta(days=1)
+    return day.isoformat()
+
+
 def process_next(collect_fn=None) -> bool:
     collect_fn = collect_fn or collector_module.collect_product
     with closing(db.connect()) as conn, conn:
@@ -373,7 +398,8 @@ def process_next(collect_fn=None) -> bool:
                     join_single=False,
                     expected_product_id=product_id,
                     is_midnight=bool(job["is_midnight"]),
-                    baseline_day=str(job["created_at"])[:10],
+                    baseline_day=baseline_day(str(job["created_at"]), job.get("baseline_slot")),
+                    baseline_slot=job.get("baseline_slot"),
                 )
 
             with closing(db.connect()) as conn, conn:

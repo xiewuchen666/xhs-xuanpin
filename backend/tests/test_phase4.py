@@ -28,6 +28,7 @@ class ExporterTests(unittest.TestCase):
                 "total_sales": 123,
                 "today": 5,
                 "rolling24": 8,
+                "rolling24_basis": "加入后 · 已监控8小时",
                 "increment": 2,
                 "interval_hours": 0.6,
                 "updated_at": "2026-09-19 01:00:00",
@@ -41,7 +42,8 @@ class ExporterTests(unittest.TestCase):
         rows = list(csv.reader(io.StringIO(text)))
         self.assertEqual(rows[0][0], "商品标题")
         self.assertEqual(rows[1][0], "中文商品")
-        self.assertEqual(rows[1][8], "0.6")
+        self.assertEqual(rows[1][7], "加入后 · 已监控8小时")
+        self.assertEqual(rows[1][9], "0.6")
 
     def test_xlsx_preserves_chinese_and_numeric_values(self):
         data, mimetype, filename = exporter.build_export(
@@ -65,6 +67,7 @@ class ExporterTests(unittest.TestCase):
                 "total_sales": 123,
                 "today": 5,
                 "rolling24": 8,
+                "rolling24_basis": "完整24小时",
                 "increment": 2,
                 "interval_hours": 0.6,
                 "updated_at": "2026-09-19 01:00:00",
@@ -79,7 +82,8 @@ class ExporterTests(unittest.TestCase):
         self.assertEqual(sheet["A2"].value, "测试店铺")
         self.assertEqual(sheet["L2"].value, "中文商品")
         self.assertEqual(sheet["Q2"].value, 8)
-        self.assertEqual(sheet["S2"].value, 0.6)
+        self.assertEqual(sheet["R2"].value, "完整24小时")
+        self.assertEqual(sheet["T2"].value, 0.6)
 
 
 class ExportApiTests(unittest.TestCase):

@@ -129,6 +129,9 @@ class PhaseTwoDatabaseTests(unittest.TestCase):
         self.assertEqual(shop["today"]["value"], 25)
         self.assertEqual(shop["today"]["covered"], 1)
         self.assertEqual(shop["today"]["total"], 2)
+        self.assertIsNone(shop["rolling24"]["value"])
+        exact_product = next(item for item in shop["products"] if item["id"] == exact_id)
+        self.assertTrue(exact_product["rolling24"]["partial"])
 
     def test_shop_membership_refreshes_metadata_and_moves_when_shop_changes(self):
         product_id = self.add_product("move-shop", "shop-old", "旧店铺", 100)

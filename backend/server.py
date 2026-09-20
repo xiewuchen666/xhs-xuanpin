@@ -297,15 +297,21 @@ def configure_scheduler(app: Flask) -> None:
     if not scheduler:
         return
     cfg = db.get_settings()
-    for name in ("auto_collect", "midnight_collect"):
+    midnight_jobs = {
+        "midnight_collect_2355": (23, 55, "2355"),
+        "midnight_collect_0000": (0, 0, "0000"),
+        "midnight_collect_0005": (0, 5, "0005"),
+        "midnight_collect_0010": (0, 10, "0010"),
+    }
+    for name in ("auto_collect", "midnight_collect", *midnight_jobs):
         if scheduler.get_job(name):
             scheduler.remove_job(name)
 
-    def submit(midnight: bool = False) -> None:
-        trigger = "midnight" if midnight else "interval"
+    def submit(baseline_slot: str | None = None) -> None:
+        trigger = f"midnight-{baseline_slot}" if baseline_slot else "interval"
         app.logger.info("Scheduled collection trigger fired: %s", trigger)
         try:
-            job_id = jobs.enqueue("all", is_midnight=midnight)
+            job_id = jobs.enqueue("all", baseline_slot=baseline_slot)
             app.logger.info(
                 "Scheduled collection queued: job=%s trigger=%s",
                 job_id,
@@ -329,17 +335,19 @@ def configure_scheduler(app: Flask) -> None:
             misfire_grace_time=60,
         )
     if cfg.get("midnight_enabled") == "1":
-        scheduler.add_job(
-            lambda: submit(True),
-            "cron",
-            hour=0,
-            minute=0,
-            id="midnight_collect",
-            timezone=metrics.TZ,
-            coalesce=True,
-            max_instances=1,
-            misfire_grace_time=60,
-        )
+        for job_id, (hour, minute, slot) in midnight_jobs.items():
+            scheduler.add_job(
+                submit,
+                "cron",
+                args=[slot],
+                hour=hour,
+                minute=minute,
+                id=job_id,
+                timezone=metrics.TZ,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=60,
+            )
 
     app.logger.info(
         "Scheduler configured: auto_enabled=%s interval_minutes=%s midnight_enabled=%s",
