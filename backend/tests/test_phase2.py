@@ -306,6 +306,32 @@ class PhaseTwoApiTests(unittest.TestCase):
         self.assertEqual(shop["brand_notes_count"], 321)
         self.assertEqual(shop["product_count"], 1)
 
+    def test_shop_import_duplicate_link_does_not_overwrite_product(self):
+        response = self.client.post(
+            "/api/shops/import",
+            json={"text": "https://xiaohongshu.com/goods-detail/new-share-link"},
+        )
+        duplicate = payload(
+            "api-phase2",
+            "不应覆盖的店铺商品",
+            "2026-09-18 12:30:00",
+            shop_id="other-shop",
+            shop_name="不应覆盖的店铺",
+            sales=999,
+        )
+
+        self.assertTrue(jobs.process_next(lambda _url: duplicate))
+
+        job = jobs.get_job(response.get_json()["job_id"])
+        self.assertEqual(job["status"], "success")
+        self.assertEqual(job["items"][0]["status"], "skipped")
+        self.assertEqual(job["items"][0]["message"], "已加入店铺监控")
+        product = db.get_product(self.product_id)
+        self.assertEqual(product["url"], "https://xiaohongshu.com/goods-detail/api-phase2")
+        self.assertEqual(product["title"], "阶段二商品")
+        self.assertEqual(product["total_sales"], 100)
+        self.assertEqual(db.snapshot_count(self.product_id), 1)
+
     def test_direct_selection_collect_does_not_join_single_monitor(self):
         direct = payload(
             "direct-selection",
@@ -324,6 +350,27 @@ class PhaseTwoApiTests(unittest.TestCase):
         self.assertFalse(db.is_in_single_monitor(product_id))
         selected = db.list_selection_products(as_of="2026-09-18 11:00:00")
         self.assertIn(product_id, [row["id"] for row in selected])
+
+    def test_direct_selection_duplicate_keeps_existing_data(self):
+        duplicate = payload(
+            "api-phase2",
+            "不应覆盖的选品标题",
+            "2026-09-18 13:00:00",
+            shop_id="other-shop",
+            shop_name="不应覆盖的店铺",
+            sales=999,
+        )
+        with mock.patch("server.collector.collect_product", return_value=duplicate):
+            response = self.client.post(
+                "/api/products/collect",
+                json={"url": "https://xiaohongshu.com/goods-detail/selection-duplicate", "scope": "selection"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["duplicate"])
+        self.assertEqual(response.get_json()["message"], "已加入选品中心")
+        self.assertEqual(db.get_product(self.product_id)["title"], "阶段二商品")
+        self.assertEqual(db.snapshot_count(self.product_id), 1)
 
 
 if __name__ == "__main__":

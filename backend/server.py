@@ -158,6 +158,32 @@ def create_app(testing: bool = False) -> Flask:
                 return _api_error("无效加入范围")
             url = collector.validate_url(body.get("url", ""))
             data = collector.collect_product(url)
+            existing = db.get_product_by_item_id(str(data.get("item_id") or "").strip())
+            if existing:
+                product_id = int(existing["id"])
+                duplicate = db.join_existing_scope(product_id, scope)
+                message = (
+                    {
+                        "single": "已加入监控",
+                        "shop": "已加入店铺监控",
+                        "selection": "已加入选品中心",
+                    }[scope]
+                    if duplicate
+                    else {
+                        "single": "已恢复监控",
+                        "shop": "已重新加入店铺监控",
+                        "selection": "已重新加入选品中心",
+                    }[scope]
+                )
+                return jsonify(
+                    ok=True,
+                    product_id=product_id,
+                    product=existing,
+                    scope=scope,
+                    duplicate=duplicate,
+                    restored=not duplicate,
+                    message=message,
+                )
             product_id = db.persist(
                 url,
                 data,
@@ -166,7 +192,19 @@ def create_app(testing: bool = False) -> Flask:
             )
             if scope == "selection":
                 db.add_selection(product_id)
-            return jsonify(ok=True, product_id=product_id, product=data, scope=scope)
+            return jsonify(
+                ok=True,
+                product_id=product_id,
+                product=data,
+                scope=scope,
+                duplicate=False,
+                restored=False,
+                message={
+                    "single": "已加入监控",
+                    "shop": "已加入店铺监控",
+                    "selection": "已加入选品中心",
+                }[scope],
+            )
         except (ValueError, RuntimeError) as exc:
             return _api_error(str(exc))
         except Exception:

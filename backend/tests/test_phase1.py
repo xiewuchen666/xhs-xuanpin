@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import db
@@ -311,6 +312,45 @@ class PhaseOneApiTests(unittest.TestCase):
         )
         response = self.client.post(f"/api/products/{self.product_id}/collect", json={})
         self.assertEqual(response.status_code, 409)
+
+    def test_duplicate_share_link_keeps_history_and_removed_product_can_rejoin(self):
+        changed = payload(
+            "sku-api",
+            "不应覆盖的标题",
+            "2026-09-18 11:00:00",
+            sales=999,
+        )
+        new_url = "https://xiaohongshu.com/goods-detail/another-share-link"
+
+        with mock.patch("server.collector.collect_product", return_value=changed):
+            response = self.client.post(
+                "/api/products/collect",
+                json={"url": new_url, "scope": "single"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["duplicate"])
+        self.assertEqual(response.get_json()["message"], "已加入监控")
+        product = db.get_product(self.product_id)
+        self.assertEqual(product["url"], "https://xiaohongshu.com/goods-detail/api-one")
+        self.assertEqual(product["title"], "API 商品")
+        self.assertEqual(product["total_sales"], 100)
+        self.assertEqual(db.snapshot_count(self.product_id), 1)
+
+        db.remove_single_monitor(self.product_id)
+        with mock.patch("server.collector.collect_product", return_value=changed):
+            response = self.client.post(
+                "/api/products/collect",
+                json={"url": new_url, "scope": "single"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json()["duplicate"])
+        self.assertTrue(response.get_json()["restored"])
+        self.assertEqual(response.get_json()["message"], "已恢复监控")
+        self.assertTrue(db.is_in_single_monitor(self.product_id))
+        self.assertEqual(db.get_product(self.product_id)["url"], "https://xiaohongshu.com/goods-detail/api-one")
+        self.assertEqual(db.snapshot_count(self.product_id), 1)
 
 
 class PhaseOneMigrationTests(unittest.TestCase):

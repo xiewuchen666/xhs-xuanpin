@@ -443,6 +443,55 @@ def get_product(product_id: int) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def get_product_by_item_id(item_id: str) -> dict[str, Any] | None:
+    with closing(connect()) as conn:
+        row = conn.execute("SELECT * FROM products WHERE item_id=?", (item_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def join_existing_scope(product_id: int, scope: str) -> bool:
+    """Join an existing product without changing its record or snapshot history.
+
+    Returns True when the product was already in the requested scope.
+    """
+    with closing(connect()) as conn, conn:
+        product = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+        if not product:
+            raise ValueError("商品不存在")
+
+        if scope == "single":
+            table = "single_monitor_products"
+        elif scope == "shop":
+            table = "shop_monitor_products"
+        elif scope == "selection":
+            table = "selection_pool_products"
+        else:
+            raise ValueError("无效加入范围")
+
+        exists = conn.execute(
+            f"SELECT 1 FROM {table} WHERE product_id=?", (product_id,)
+        ).fetchone() is not None
+        if exists:
+            return True
+
+        if scope == "single":
+            conn.execute(
+                "INSERT INTO single_monitor_products(product_id,added_at) VALUES(?,?)",
+                (product_id, now_text()),
+            )
+            conn.execute(
+                "UPDATE products SET monitor_state='active' WHERE id=?", (product_id,)
+            )
+        elif scope == "shop":
+            _shop_membership(conn, product_id, dict(product))
+        else:
+            conn.execute(
+                "INSERT INTO selection_pool_products(product_id,added_at) VALUES(?,?)",
+                (product_id, now_text()),
+            )
+        return False
+
+
 def is_in_single_monitor(product_id: int) -> bool:
     with closing(connect()) as conn:
         return conn.execute(

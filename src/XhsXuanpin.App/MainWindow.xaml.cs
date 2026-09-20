@@ -895,10 +895,14 @@ public partial class MainWindow : Window
             if (!collectResponse.IsSuccessStatusCode || result?.ok != true)
                 throw new InvalidOperationException(result?.error ?? "采集失败");
 
-            BridgeTitle.Text = addToSelection ? "已加入选品中心" : "已加入监控";
-            BridgeStatus.Text = addToSelection
-                ? "商品已进入持续监控，并加入选品中心"
-                : "真实商品已写入独立数据库";
+            BridgeTitle.Text = result.message ?? (addToSelection ? "已加入选品中心" : "已加入监控");
+            BridgeStatus.Text = result.duplicate
+                ? "该商品已存在，原有商品数据和历史采样均未修改"
+                : result.restored
+                    ? "已恢复对应监控关系，原有商品数据和历史采样均未修改"
+                : addToSelection
+                    ? "商品已进入持续监控，并加入选品中心"
+                    : "真实商品已写入独立数据库";
             _pageMessageHoldUntilUtc = DateTime.UtcNow.AddSeconds(3);
             await Workspace.ExecuteScriptAsync("window.dispatchEvent(new Event('xhs-product-collected'))");
         }
@@ -956,7 +960,7 @@ public partial class MainWindow : Window
         host.EndsWith(".xiaohongshu.com", StringComparison.OrdinalIgnoreCase);
 
     private sealed record WorkspaceMessage(string? type, string? module, string? format, JsonElement rows);
-    private sealed record CollectResponse(bool ok, int product_id, string? error);
+    private sealed record CollectResponse(bool ok, int product_id, bool duplicate, bool restored, string? message, string? error);
     private sealed record ActionResponse(bool ok, string? error);
     private sealed record ScheduledJobResponse(string id, string? next_run_time);
     private sealed record LatestJobResponse(int id, string status);

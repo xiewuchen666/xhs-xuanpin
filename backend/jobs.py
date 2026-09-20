@@ -356,28 +356,39 @@ def process_next(collect_fn=None) -> bool:
             data = collect_fn(str(item["url"]))
 
             if job["kind"] == "import":
-                item_id = str(data.get("item_id") or "")
-                with closing(db.connect()) as conn:
-                    duplicate = conn.execute(
-                        """
-                        SELECT 1
-                        FROM job_items i
-                        JOIN products p ON p.id=i.product_id
-                        WHERE i.job_id=? AND i.status='success' AND p.item_id=?
-                        """,
-                        (job["id"], item_id),
-                    ).fetchone()
-                if duplicate:
+                existing = db.get_product_by_item_id(
+                    str(data.get("item_id") or "").strip()
+                )
+                if existing:
+                    product_id = int(existing["id"])
+                    duplicate = db.join_existing_scope(product_id, str(job["scope"]))
+                    message = (
+                        {
+                            "single": "已加入监控",
+                            "shop": "已加入店铺监控",
+                            "selection": "已加入选品中心",
+                        }[job["scope"]]
+                        if duplicate
+                        else {
+                            "single": "已恢复监控",
+                            "shop": "已重新加入店铺监控",
+                            "selection": "已重新加入选品中心",
+                        }[job["scope"]]
+                    )
                     with closing(db.connect()) as conn, conn:
                         conn.execute(
                             """
                             UPDATE job_items
-                            SET status='skipped',
-                                message='同一商品的其他分享链接，本任务已添加',
-                                finished_at=?
+                            SET product_id=?,status=?,message=?,finished_at=?
                             WHERE id=?
                             """,
-                            (db.now_text(), item["id"]),
+                            (
+                                product_id,
+                                "skipped" if duplicate else "success",
+                                message,
+                                db.now_text(),
+                                item["id"],
+                            ),
                         )
                     continue
 
