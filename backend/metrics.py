@@ -507,7 +507,7 @@ def sales_trend(
 
     cutoff = current - timedelta(hours=24)
     hourly = []
-    for point in chart_rows(source):
+    for point in chart_rows([snapshot for snapshot in source if not snapshot.get("is_midnight")]):
         point_time = timestamp(point["time"])
         if not point_time or point_time < cutoff or point_time > current:
             continue

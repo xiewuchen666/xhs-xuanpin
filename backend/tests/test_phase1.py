@@ -74,6 +74,20 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertEqual(trend["hourly"][-1]["average_hourly"], 5.6)
         self.assertIn("2.5 小时", trend["hourly"][-1]["reason"])
 
+    def test_hourly_trend_ignores_midnight_baseline_samples(self):
+        snapshots = [
+            {"id": 1, "collected_at": "2026-09-18 23:55:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact"},
+            {"id": 2, "collected_at": "2026-09-19 00:00:00", "total_sales": 80, "sales_raw": "已售80", "sales_precision": "exact", "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0000"},
+            {"id": 3, "collected_at": "2026-09-19 00:05:00", "total_sales": 90, "sales_raw": "已售90", "sales_precision": "exact", "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0005"},
+            {"id": 4, "collected_at": "2026-09-19 00:10:00", "total_sales": 101, "sales_raw": "已售101", "sales_precision": "exact", "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "0010"},
+            {"id": 5, "collected_at": "2026-09-19 00:55:00", "total_sales": 102, "sales_raw": "已售102", "sales_precision": "exact"},
+        ]
+
+        trend = metrics.sales_trend(snapshots, as_of="2026-09-19 00:55:00")
+
+        self.assertEqual([point["label"] for point in trend["hourly"]], ["23:55", "00:55"])
+        self.assertEqual([point["value"] for point in trend["hourly"]], [None, 2])
+
     def test_rolling_window_stays_anchored_to_latest_sample_between_runs(self):
         product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-18 10:00:00"}
         snapshots = [
