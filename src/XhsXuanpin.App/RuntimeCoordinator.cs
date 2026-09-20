@@ -53,7 +53,6 @@ internal sealed class RuntimeCoordinator : IDisposable
             await EnsureAndroidAsync();
             _androidUi = new AndroidUi(_adb, Serial);
             await EnsureScrcpyAsync();
-            HideMuMuWindows();
             _androidStarted = true;
             AppLogger.Info("Runtime", "Android initialization completed");
         }
@@ -472,6 +471,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (IsScrcpyHealthy())
         {
             AttachScrcpyWindow();
+            HideMuMuWindows();
             AppLogger.Info("Runtime", "Existing scrcpy window is healthy and attached");
             return;
         }
@@ -529,6 +529,7 @@ internal sealed class RuntimeCoordinator : IDisposable
             throw new InvalidOperationException($"未找到本次 scrcpy 进程({_scrcpy.Id})的窗口");
 
         AttachScrcpyWindow();
+        HideMuMuWindows();
         AppLogger.Info("Runtime", $"scrcpy window attached; hwnd={_scrcpyWindow}");
     }
 
