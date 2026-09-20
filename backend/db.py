@@ -443,6 +443,45 @@ def get_product(product_id: int) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def get_product_trend(product_id: int, as_of=None) -> dict[str, Any] | None:
+    with closing(connect()) as conn:
+        product = conn.execute(
+            """
+            SELECT p.*
+            FROM products p
+            JOIN single_monitor_products sm ON sm.product_id=p.id
+            WHERE p.id=?
+            """,
+            (product_id,),
+        ).fetchone()
+        if not product:
+            return None
+        snapshots = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM snapshots WHERE product_id=? ORDER BY collected_at,id",
+                (product_id,),
+            )
+        ]
+        tolerance = conn.execute(
+            "SELECT value FROM settings WHERE key='day_tolerance_minutes'"
+        ).fetchone()
+        try:
+            day_tolerance = int(tolerance["value"]) if tolerance else 5
+        except (TypeError, ValueError):
+            day_tolerance = 5
+        return {
+            "product": {
+                "id": product["id"],
+                "title": product["title"],
+                "shop_name": product["shop_name"],
+                "image_url": product["image_url"],
+                "last_collected_at": product["last_collected_at"],
+            },
+            **metrics.sales_trend(snapshots, as_of=as_of, day_tolerance=day_tolerance),
+        }
+
+
 def get_product_by_item_id(item_id: str) -> dict[str, Any] | None:
     with closing(connect()) as conn:
         row = conn.execute("SELECT * FROM products WHERE item_id=?", (item_id,)).fetchone()

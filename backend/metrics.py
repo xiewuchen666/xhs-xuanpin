@@ -464,3 +464,63 @@ def chart_rows(snapshots: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "midnight": bool(row.get("is_midnight")),
         })
     return result
+
+
+def sales_trend(
+    snapshots: List[Dict[str, Any]],
+    as_of: Optional[datetime] = None,
+    day_tolerance: int = 5,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Build daily and hourly sales series from the existing counter rules."""
+    current = timestamp(as_of) or now()
+    source = [snapshot for snapshot in snapshots if (timestamp(snapshot.get("collected_at")) or current) <= current]
+    rows = [normalized_snapshot(row) for row in source]
+    rows = sorted([row for row in rows if row["_time"]], key=lambda row: (row["_time"], row.get("id", 0)))
+    rows = resolve_counter_rows(rows)
+    effective = effective_counter_rows(rows)
+
+    daily = []
+    for offset in range(29, -1, -1):
+        day = current.date() - timedelta(days=offset)
+        start = datetime.combine(day, datetime.min.time(), tzinfo=TZ)
+        finish = start + timedelta(days=1)
+        end = (
+            rows[-1]
+            if day == current.date() and rows and rows[-1]["_time"] >= start
+            else nearest(effective, finish, day_tolerance, current)
+        )
+        base = nearest(effective, start, day_tolerance, current)
+        metric = interval(base, end, rows, bool(base and base["_time"] != start)) if base and end else missing("缺少日界附近的有效采样")
+        joined = bool(rows and effective and rows[0] is effective[0] and start <= rows[0]["_time"] < finish)
+        if metric["value"] is None and joined and end:
+            metric = interval(effective[0], end, rows)
+            if metric["value"] is not None:
+                metric.update(partial=True, reason="监控首日按加入后的首次采集计算")
+        if metric["value"] is not None and day == current.date():
+            metric["partial"] = True
+            metric["reason"] = "今日截至最近一次有效采集，尚未形成完整自然日"
+        daily.append({
+            "date": day.isoformat(),
+            "label": day.strftime("%m-%d"),
+            **metric,
+        })
+
+    cutoff = current - timedelta(hours=24)
+    hourly = []
+    for point in chart_rows(source):
+        point_time = timestamp(point["time"])
+        if not point_time or point_time < cutoff or point_time > current:
+            continue
+        hours = point.get("hours")
+        value = point.get("delta")
+        regular_interval = value is not None and hours is not None and 0.5 <= hours <= 1.5
+        reason = point["reason"]
+        if value is not None and not regular_interval:
+            reason = "实际采集间隔为 %.1f 小时，不作为单小时销量点" % hours
+        hourly.append({
+            **point,
+            "label": point_time.strftime("%H:%M"),
+            "value": value if regular_interval else None,
+            "reason": reason,
+        })
+    return {"daily": daily, "hourly": hourly}

@@ -18,6 +18,14 @@ const actionSelection = document.querySelector('#actionSelection');
 const actionShop = document.querySelector('#actionShop');
 const actionRemove = document.querySelector('#actionRemove');
 
+const trendOverlay = document.querySelector('#trendOverlay');
+const trendProductTitle = document.querySelector('#trendProductTitle');
+const trendClose = document.querySelector('#trendClose');
+const trendChart = document.querySelector('#trendChart');
+const trendSummary = document.querySelector('#trendSummary');
+const trendNote = document.querySelector('#trendNote');
+const trendTabs = [...document.querySelectorAll('[data-trend-mode]')];
+
 const shopImportOverlay = document.querySelector('#shopImportOverlay');
 const shopImportClose = document.querySelector('#shopImportClose');
 const shopImportCancel = document.querySelector('#shopImportCancel');
@@ -42,6 +50,8 @@ const settingsRuntime = document.querySelector('#settingsRuntime');
 
 let activeActionProductId = null;
 let activeActionContext = 'single';
+let activeTrendData = null;
+let activeTrendMode = 'daily';
 let allProducts = [];
 let allShops = [];
 let expandedShopKeys = new Set();
@@ -248,6 +258,10 @@ function productRow(product, context) {
   const image = product.image_url
     ? '<img src="' + esc(product.image_url) + '" alt="" referrerpolicy="no-referrer">'
     : '<img alt="">';
+  const trendButton = context === 'single'
+    ? '<button class="trend-btn" type="button" aria-label="查看成交趋势" title="成交趋势" data-trend-product-id="' + product.id + '">' +
+      '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 15.5V4.5M3 15.5h14M5.5 12l3-3 2.5 2 4-5"/></svg></button>'
+    : '';
   return '<tr data-product-id="' + product.id + '">' +
       '<td><div class="product">' + image + '<div class="copy">' +
       '<a class="product-title-link" href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer" title="' + esc(product.title) + '">' + esc(product.title) + '</a>' +
@@ -262,7 +276,7 @@ function productRow(product, context) {
       '<td><span>' + esc(product.last_collected_at || '—') + '</span></td>' +
       '<td><span class="status ' + (paused ? 'paused' : (product.health || 'active')) + '">' +
         esc(paused ? '● 已暂停' : ('● ' + (product.health_label || '正常'))) + '</span></td>' +
-      '<td><div class="actions"><button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
+      '<td><div class="actions">' + trendButton + '<button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
       'data-more-product-id="' + product.id + '" data-more-title="' + esc(product.title) + '" ' +
       'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" ' +
       'data-more-shop="' + (inShop ? '1' : '0') + '" data-more-context="' + esc(context) + '">···</button></div></td></tr>';
@@ -844,7 +858,7 @@ async function saveSettings() {
 }
 
 async function refreshCurrentViewData() {
-  if (!actionOverlay.hidden || !settingsOverlay.hidden || !shopImportOverlay.hidden || !exportOverlay.hidden) return;
+  if (!actionOverlay.hidden || !trendOverlay.hidden || !settingsOverlay.hidden || !shopImportOverlay.hidden || !exportOverlay.hidden) return;
   if (view === 'single') {
     allProducts = await api('/api/products');
     productHeader(allProducts, false);
@@ -926,6 +940,92 @@ function openActionPanel(button) {
   actionClose.focus();
 }
 
+function closeTrendPanel() {
+  trendOverlay.hidden = true;
+  activeTrendData = null;
+}
+
+function renderTrendChart() {
+  const points = activeTrendData?.[activeTrendMode] || [];
+  const valid = points.filter(point => point.value != null && Number.isFinite(Number(point.value)));
+  trendTabs.forEach(tab => {
+    const active = tab.dataset.trendMode === activeTrendMode;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  trendNote.textContent = activeTrendMode === 'daily'
+    ? '日销量按相邻自然日有效基线计算；今日为截至最近一次有效采集的未完整数据。'
+    : '小时销量按相邻有效采集的实际区间显示；非 30–90 分钟区间、回落及重置点断线，不拆分估算。';
+  if (!valid.length) {
+    trendSummary.textContent = '暂无可计算的趋势点';
+    trendChart.innerHTML = '<div class="trend-empty">采集历史不足，或当前区间存在待确认数据。</div>';
+    return;
+  }
+
+  const width = 860, height = 320, left = 62, right = 18, top = 18, bottom = 42;
+  const innerWidth = width - left - right, innerHeight = height - top - bottom;
+  const maximum = Math.max(...valid.map(point => Number(point.value)), 1);
+  const xAt = index => points.length === 1 ? left + innerWidth / 2 : left + innerWidth * index / (points.length - 1);
+  const yAt = value => top + innerHeight - innerHeight * Number(value) / maximum;
+  const coordinates = points.map((point, index) => point.value == null ? null : {point, x:xAt(index), y:yAt(point.value)});
+  const segments = [];
+  let segment = [];
+  coordinates.forEach(coordinate => {
+    if (coordinate) segment.push(coordinate);
+    else if (segment.length) { segments.push(segment); segment = []; }
+  });
+  if (segment.length) segments.push(segment);
+
+  const grid = Array.from({length:5}, (_, index) => {
+    const value = maximum * (4 - index) / 4;
+    const y = top + innerHeight * index / 4;
+    return '<line x1="' + left + '" y1="' + y + '" x2="' + (width - right) + '" y2="' + y + '" class="trend-grid"/>' +
+      '<text x="' + (left - 10) + '" y="' + (y + 4) + '" text-anchor="end" class="trend-axis">' + esc(Math.round(value).toLocaleString('zh-CN')) + '</text>';
+  }).join('');
+  const labelIndexes = [...new Set([0, Math.round((points.length - 1) / 4), Math.round((points.length - 1) / 2), Math.round((points.length - 1) * 3 / 4), points.length - 1])];
+  const labels = labelIndexes.map(index =>
+    '<text x="' + xAt(index) + '" y="' + (height - 13) + '" text-anchor="middle" class="trend-axis">' + esc(points[index]?.label || '') + '</text>'
+  ).join('');
+  const lines = segments.map(items =>
+    '<polyline points="' + items.map(item => item.x + ',' + item.y).join(' ') + '" class="trend-line"/>'
+  ).join('');
+  const circles = coordinates.filter(Boolean).map(item => {
+    const point = item.point;
+    const period = activeTrendMode === 'daily'
+      ? point.date + (point.partial ? '（未完整）' : '')
+      : (point.from_time || '—') + ' 至 ' + point.time;
+    return '<circle cx="' + item.x + '" cy="' + item.y + '" r="4" class="trend-point"><title>' +
+      esc(period + '：+' + formatSales(point.value) + '，' + (point.reason || '')) + '</title></circle>';
+  }).join('');
+  const latest = valid[valid.length - 1];
+  trendSummary.textContent = '有效点 ' + valid.length + ' 个 · 最近 +' + formatSales(latest.value) + ' · 最高 +' + formatSales(maximum);
+  trendChart.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="商品成交趋势折线图">' +
+    grid + labels + lines + circles + '</svg>';
+}
+
+async function openTrendPanel(button) {
+  const productId = Number(button.dataset.trendProductId);
+  if (!productId) return;
+  activeTrendMode = 'daily';
+  activeTrendData = null;
+  trendProductTitle.textContent = '正在读取商品趋势…';
+  trendSummary.textContent = '';
+  trendNote.textContent = '';
+  trendChart.innerHTML = '<div class="trend-empty">正在加载趋势数据…</div>';
+  trendOverlay.hidden = false;
+  trendClose.focus();
+  try {
+    const result = await api('/api/products/' + productId + '/trend');
+    if (trendOverlay.hidden) return;
+    activeTrendData = result;
+    trendProductTitle.textContent = result.product?.title || '当前商品';
+    renderTrendChart();
+  } catch (error) {
+    trendProductTitle.textContent = '成交趋势';
+    trendChart.innerHTML = '<div class="trend-empty">' + esc(error.message || '趋势数据加载失败') + '</div>';
+  }
+}
+
 async function runAction(action, button) {
   const productId = activeActionProductId;
   if (!productId || button.disabled) return;
@@ -981,6 +1081,11 @@ async function reloadCurrentView(keepNotice = false) {
 }
 
 content.addEventListener('click', event => {
+  const trend = event.target.closest('button[data-trend-product-id]');
+  if (trend) {
+    openTrendPanel(trend);
+    return;
+  }
   const more = event.target.closest('button[data-more-product-id]');
   if (more) {
     openActionPanel(more);
@@ -1006,6 +1111,15 @@ actionOverlay.addEventListener('click', event => {
   if (button && !button.disabled) runAction(button.dataset.modalAction, button);
 });
 actionClose.addEventListener('click', closeActionPanel);
+
+trendOverlay.addEventListener('click', event => {
+  if (event.target === trendOverlay) closeTrendPanel();
+});
+trendClose.addEventListener('click', closeTrendPanel);
+trendTabs.forEach(tab => tab.addEventListener('click', () => {
+  activeTrendMode = tab.dataset.trendMode;
+  renderTrendChart();
+}));
 
 shopImportOverlay.addEventListener('click', event => {
   if (event.target === shopImportOverlay) closeShopImport();
@@ -1049,6 +1163,7 @@ document.addEventListener('keydown', event => {
   if (!exportOverlay.hidden) closeExportDialog();
   else if (!shopImportOverlay.hidden) closeShopImport();
   else if (!settingsOverlay.hidden) closeSettings();
+  else if (!trendOverlay.hidden) closeTrendPanel();
   else if (!actionOverlay.hidden) closeActionPanel();
 });
 

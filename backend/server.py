@@ -116,6 +116,13 @@ def create_app(testing: bool = False) -> Flask:
     def products():
         return jsonify(db.list_products())
 
+    @app.get("/api/products/<int:product_id>/trend")
+    def product_trend(product_id: int):
+        trend = db.get_product_trend(product_id)
+        if not trend:
+            return _api_error("单品监控中不存在该商品", 404)
+        return jsonify(trend)
+
     @app.get("/api/shops")
     def shops():
         return jsonify(db.list_shops())

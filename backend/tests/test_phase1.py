@@ -50,6 +50,25 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertEqual(result["increment"]["value"], 30)
         self.assertEqual(result["health_label"], "数据已更新")
 
+    def test_sales_trend_uses_day_boundaries_and_breaks_irregular_hours(self):
+        snapshots = [
+            {"id": 1, "collected_at": "2026-09-18 00:00:00", "total_sales": 102, "sales_raw": "已售102", "sales_precision": "exact"},
+            {"id": 2, "collected_at": "2026-09-18 01:00:00", "total_sales": 107, "sales_raw": "已售107", "sales_precision": "exact"},
+            {"id": 3, "collected_at": "2026-09-18 02:00:00", "total_sales": 111, "sales_raw": "已售111", "sales_precision": "exact"},
+            {"id": 4, "collected_at": "2026-09-19 00:00:00", "total_sales": 150, "sales_raw": "已售150", "sales_precision": "exact"},
+            {"id": 5, "collected_at": "2026-09-19 01:00:00", "total_sales": 156, "sales_raw": "已售156", "sales_precision": "exact"},
+            {"id": 6, "collected_at": "2026-09-19 03:30:00", "total_sales": 170, "sales_raw": "已售170", "sales_precision": "exact"},
+        ]
+
+        trend = metrics.sales_trend(snapshots, as_of="2026-09-19 03:30:00")
+        by_day = {point["date"]: point for point in trend["daily"]}
+
+        self.assertEqual(by_day["2026-09-18"]["value"], 48)
+        self.assertEqual(by_day["2026-09-19"]["value"], 20)
+        self.assertTrue(by_day["2026-09-19"]["partial"])
+        self.assertEqual([point["value"] for point in trend["hourly"]], [None, 6, None])
+        self.assertIn("2.5 小时", trend["hourly"][-1]["reason"])
+
     def test_rolling_window_stays_anchored_to_latest_sample_between_runs(self):
         product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-18 10:00:00"}
         snapshots = [
@@ -289,6 +308,20 @@ class PhaseOneApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/products").get_json(), [])
         self.assertEqual(self.client.get("/api/selection").get_json()[0]["id"], self.product_id)
         self.assertEqual(db.snapshot_count(self.product_id), 1)
+
+    def test_product_trend_api_only_serves_single_monitor_products(self):
+        response = self.client.get(f"/api/products/{self.product_id}/trend")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["product"]["id"], self.product_id)
+        self.assertEqual(len(body["daily"]), 30)
+        self.assertIn("hourly", body)
+
+        db.remove_single_monitor(self.product_id)
+        self.assertEqual(
+            self.client.get(f"/api/products/{self.product_id}/trend").status_code,
+            404,
+        )
 
     def test_collect_one_adds_snapshot_and_paused_product_is_blocked(self):
         collected = payload(
