@@ -477,7 +477,7 @@ function renderProductTable(products, context, total) {
   }
 
   content.innerHTML =
-    '<div class="tablewrap"><table><thead><tr>' +
+    '<div class="tablewrap"><table class="product-data-table"><thead><tr>' +
     '<th style="width:36px;"></th>' +
     '<th style="min-width:200px;">商品</th>' +
     '<th style="width:130px;">店铺</th>' +
@@ -972,9 +972,7 @@ function shopProductRow(product) {
     '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
     '<td class="num">' + incrementCell(product.increment) + '</td>' +
     '<td>' + esc(productUpdateTime(product) || '—') + '</td>' +
-    '<td><div class="actions"><button class="trend-btn" type="button" aria-label="查看成交趋势" title="成交趋势" data-trend-product-id="' + product.id + '">' +
-      '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 15.5V4.5M3 15.5h14M5.5 12l3-3 2.5 2 4-5"/></svg></button>' +
-      '<button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
+    '<td><div class="actions"><button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
       'data-more-product-id="' + product.id + '" data-more-title="' + esc(product.title) + '" ' +
       'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" ' +
       'data-more-shop="1" data-more-context="shop">···</button></div></td>' +

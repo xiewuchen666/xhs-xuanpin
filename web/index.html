@@ -300,6 +300,16 @@
       vertical-align: middle;
       color: var(--ink);
     }
+    .product-data-table th,
+    .product-data-table td,
+    .shop-products-table th,
+    .shop-products-table td { text-align: center; }
+    .product-data-table th:nth-child(2),
+    .product-data-table td:nth-child(2),
+    .product-data-table th:nth-child(3),
+    .product-data-table td:nth-child(3),
+    .shop-products-table th:first-child,
+    .shop-products-table td:first-child { text-align: left; }
     tr.product-row { cursor: pointer; transition: background-color 0.12s ease; }
     tr.product-row:hover:not(.selected-row) { background: #FAFBFD; }
     tr.product-row.selected-row { background: #F4F8FF; }
@@ -752,8 +762,9 @@
     .shoplist { padding: 0; display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 8px; overflow: auto; }
     .shopcard { border: 1px solid var(--line-card); border-radius: 8px; background: #fff; overflow: hidden; }
     .shoprow { padding: 12px 14px; display: grid; grid-template-columns: 2fr 1fr 1.2fr 1.2fr 1.2fr 1fr 80px; gap: 10px; align-items: center; cursor: pointer; }
+    .shoprow > * { text-align: center; }
     .shoprow:hover { background: #FAFBFD; }
-    .shopid { display: flex; gap: 10px; align-items: center; }
+    .shopid { display: flex; gap: 10px; align-items: center; text-align: left; }
     .shoplogo { width: 36px; height: 36px; border-radius: 50%; background: var(--red-soft); color: var(--red); display: grid; place-items: center; font-weight: 600; flex: none; }
     .shopmetric span { display: block; color: var(--ink3); font-size: 11px; }
     .shopmetric b { display: block; font-size: 14px; font-weight: 600; margin-top: 2px; }
@@ -876,6 +887,6 @@
       <div class="trend-note" id="trendNote"></div>
     </section>
   </div>
-  <script src="/app.js?v=2.3.5"></script>
+  <script src="/app.js?v=2.3.7"></script>
 </body>
 </html>
