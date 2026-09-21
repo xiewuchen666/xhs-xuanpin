@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\xhs-launch-placeholder.jpg" />
+    <Resource Include="Assets\xhs-launch-placeholder.png" />
     <Resource Include="Assets\logo.png" />
     <Resource Include="Assets\logo.ico" />
   </ItemGroup>

@@ -53,6 +53,7 @@ const dockCard = document.querySelector('#dockCard');
 
 let selectedProductId = null;
 let dockTrendMode = 'daily';
+let dockTrendRange = 7;
 let cachedTrends = {};
 let activeActionProductId = null;
 let activeActionContext = 'single';
@@ -66,6 +67,7 @@ let productPageSize = 30;
 let shopPage = 1;
 let shopPageSize = 30;
 let importScope = 'shop';
+let refreshInFlight = false;
 const watchedImportJobs = new Set();
 
 function showNotice(message, type = '') {
@@ -616,7 +618,6 @@ function renderDockPanel(product) {
               '<div class="dock-shop-row">' +
                 '<span style="font-weight:500;color:var(--ink);">' + esc(shopInfo.name) + '</span>' +
                 dockSubHtml +
-                '<a class="dock-shop-link" href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer">查看商品 &gt;</a>' +
               '</div>' +
             '</div>' +
             '<div class="dock-metrics-grid">' +
@@ -631,7 +632,7 @@ function renderDockPanel(product) {
       '<div class="dock-links-row">' +
         '<a href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer" class="dock-link-btn">' +
           '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
-          '在小红书打开' +
+          '查看详情' +
         '</a>' +
         '<button id="dockCopyLinkBtn" type="button" class="dock-link-btn">' +
           '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>' +
@@ -648,7 +649,14 @@ function renderDockPanel(product) {
             '<button class="trend-mode-btn ' + (dockTrendMode === 'hourly' ? 'active' : '') + '" type="button" data-dock-mode="hourly">小时销量</button>' +
           '</div>' +
         '</div>' +
-        '<div class="trend-summary-text" id="dockTrendSummary"></div>' +
+        '<div class="trend-head-right">' +
+          (dockTrendMode === 'daily' ? '<div class="trend-range-switch">' + [7, 30, 0].map(days =>
+            '<button class="trend-range-btn ' + (dockTrendRange === days ? 'active' : '') + '" type="button" data-dock-range="' + days + '">' +
+              (days ? '近' + days + '天' : '全部') +
+            '</button>'
+          ).join('') + '</div>' : '') +
+          '<div class="trend-summary-text" id="dockTrendSummary"></div>' +
+        '</div>' +
       '</div>' +
       '<div class="trend-svg-container" id="dockTrendSvgWrap">' +
         '<div style="height:100%;display:grid;place-items:center;color:var(--ink3);font-size:12px;">正在加载走势图…</div>' +
@@ -671,28 +679,35 @@ function renderDockPanel(product) {
       renderDockPanel(product);
     });
   });
+  document.querySelectorAll('[data-dock-range]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      dockTrendRange = Number(btn.dataset.dockRange);
+      renderDockPanel(product);
+    });
+  });
 
   loadAndRenderDockTrend(product);
 }
 
-async function loadAndRenderDockTrend(product) {
+async function loadAndRenderDockTrend(product, forceRefresh = false) {
+  let trend = cachedTrends[product.id];
+  if (!trend || forceRefresh) {
+    try {
+      trend = await api('/api/products/' + product.id + '/trend');
+      cachedTrends[product.id] = trend;
+    } catch (_) {}
+  }
+  if (Number(selectedProductId) !== Number(product.id)) return;
+
   const container = document.querySelector('#dockTrendSvgWrap');
   const summaryEl = document.querySelector('#dockTrendSummary');
   const noteEl = document.querySelector('#dockTrendNote');
   if (!container) return;
 
-  let trend = cachedTrends[product.id];
-  if (!trend) {
-    try {
-      trend = await api('/api/products/' + product.id + '/trend');
-      cachedTrends[product.id] = trend;
-    } catch (_) {
-      trend = null;
-    }
-  }
-  if (Number(selectedProductId) !== Number(product.id)) return;
-
-  const points = (dockTrendMode === 'daily' ? trend?.daily : trend?.hourly) || [];
+  const sourcePoints = (dockTrendMode === 'daily' ? trend?.daily : trend?.hourly) || [];
+  const points = dockTrendMode === 'daily' && dockTrendRange
+    ? sourcePoints.slice(-dockTrendRange)
+    : sourcePoints;
   const valid = points.filter(point => point.value != null && Number.isFinite(Number(point.value)));
   const gapPoints = dockTrendMode === 'hourly'
     ? points.filter(point => point.gap && Number.isFinite(Number(point.average_hourly)))
@@ -743,6 +758,12 @@ async function loadAndRenderDockTrend(product) {
     '<polyline points="' + items.map(item => item.x + ',' + item.y).join(' ') + '" class="trend-line"/>'
   ).join('') : '';
 
+  const areas = dockTrendMode === 'daily' ? segments.filter(items => items.length > 1).map(items =>
+    '<polygon points="' + items[0].x + ',' + (top + innerHeight) + ' ' +
+      items.map(item => item.x + ',' + item.y).join(' ') + ' ' +
+      items[items.length - 1].x + ',' + (top + innerHeight) + '" class="trend-area"/>'
+  ).join('') : '';
+
   const circles = dockTrendMode === 'daily' ? coordinates.filter(Boolean).map(item => {
     const point = item.point;
     const period = point.date + (point.partial ? '（未完整）' : '');
@@ -776,7 +797,7 @@ async function loadAndRenderDockTrend(product) {
 
   const chartLabel = dockTrendMode === 'daily' ? '商品日销量折线图' : '商品小时销量柱状图';
   container.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="' + chartLabel + '">' +
-    grid + labels + lines + circles + bars + '</svg>';
+    grid + labels + areas + lines + circles + bars + '</svg>';
 }
 
 
@@ -1388,23 +1409,27 @@ async function saveSettings() {
 }
 
 async function refreshCurrentViewData() {
-  if (!actionOverlay.hidden || !trendOverlay.hidden || !settingsOverlay.hidden || !shopImportOverlay.hidden || !exportOverlay.hidden) return;
-  cachedTrends = {};
-  if (view === 'single') {
-    allProducts = await api('/api/products');
-    productHeader(allProducts, false);
-    renderCurrentProductList();
-    return;
+  if (refreshInFlight || !actionOverlay.hidden || !trendOverlay.hidden || !settingsOverlay.hidden || !shopImportOverlay.hidden || !exportOverlay.hidden) return;
+  refreshInFlight = true;
+  try {
+    if (view === 'single' || view === 'selection') {
+      const nextProducts = await api(view === 'single' ? '/api/products' : '/api/selection');
+      if (JSON.stringify(nextProducts) === JSON.stringify(allProducts)) return;
+      allProducts = nextProducts;
+      productHeader(allProducts, view === 'selection');
+      renderCurrentProductList();
+      const selectedProduct = allProducts.find(product => product.id === selectedProductId);
+      if (selectedProduct) await loadAndRenderDockTrend(selectedProduct, true);
+      return;
+    }
+    const nextShops = await api('/api/shops');
+    if (JSON.stringify(nextShops) === JSON.stringify(allShops)) return;
+    allShops = nextShops;
+    shopsHeader();
+    renderShopList();
+  } finally {
+    refreshInFlight = false;
   }
-  if (view === 'selection') {
-    allProducts = await api('/api/selection');
-    productHeader(allProducts, true);
-    renderCurrentProductList();
-    return;
-  }
-  allShops = await api('/api/shops');
-  shopsHeader();
-  renderShopList();
 }
 
 function closeActionPanel() {

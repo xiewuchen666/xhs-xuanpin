@@ -404,7 +404,7 @@
                         HorizontalAlignment="Stretch"
                         VerticalAlignment="Stretch"
                         Panel.ZIndex="5">
-                    <Image Source="Assets/xhs-launch-placeholder.jpg"
+                    <Image Source="Assets/xhs-launch-placeholder.png"
                            Stretch="Uniform"
                            HorizontalAlignment="Stretch"
                            VerticalAlignment="Stretch"

@@ -46,7 +46,7 @@
       flex-direction: column;
       padding: 14px 18px 18px;
       gap: 12px;
-      overflow-y: auto;
+      overflow: hidden;
     }
 
     /* Page Header */
@@ -188,7 +188,8 @@
       flex-direction: column;
       overflow: hidden;
       box-shadow: 0 1px 2px rgba(0,0,0,0.02);
-      flex: none;
+      flex: 1;
+      min-height: 0;
     }
     .toolbar {
       padding: 10px 14px;
@@ -260,10 +261,18 @@
     .notice.error { background: #FFF3F4; border-color: #F7CDD1; color: var(--danger); }
     .notice[hidden] { display: none; }
 
+    #content {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
     .tablewrap {
+      flex: 1;
+      min-height: 0;
       overflow-x: auto;
       overflow-y: auto;
-      max-height: 412px;
       background: #fff;
     }
     table {
@@ -386,6 +395,7 @@
     /* Pager from ui-reference.png */
     .pager {
       height: 48px;
+      flex: none;
       padding: 0 16px;
       border-top: 1px solid var(--line);
       display: flex;
@@ -445,10 +455,10 @@
       background: #fff;
       border: 1px solid var(--line-card);
       border-radius: 8px;
-      padding: 14px 18px;
+      padding: 18px 22px;
       display: grid;
-      grid-template-columns: 460px 1fr;
-      gap: 20px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0;
       box-shadow: 0 1px 2px rgba(0,0,0,0.02);
       flex: none;
     }
@@ -456,20 +466,23 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+      min-width: 0;
+      padding-right: 28px;
     }
     .dock-title-line {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
       color: var(--ink);
-      margin-bottom: 8px;
+      margin-bottom: 14px;
     }
     .dock-detail-body {
       display: flex;
-      gap: 12px;
+      align-items: flex-start;
+      gap: 16px;
     }
     .dock-thumb {
-      width: 86px;
-      height: 86px;
+      width: 128px;
+      height: 128px;
       object-fit: cover;
       border-radius: 6px;
       border: 1px solid var(--line);
@@ -481,13 +494,14 @@
       min-width: 0;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
+      justify-content: flex-start;
+      align-self: stretch;
     }
     .dock-product-title {
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
       color: var(--ink);
-      line-height: 1.35;
+      line-height: 1.5;
       overflow: hidden;
       text-overflow: ellipsis;
       display: -webkit-box;
@@ -495,26 +509,25 @@
       -webkit-box-orient: vertical;
     }
     .dock-shop-row {
-      font-size: 11px;
+      font-size: 12px;
       color: var(--ink3);
       display: flex;
       align-items: center;
       gap: 6px;
-      margin: 4px 0 6px;
+      margin-top: 8px;
     }
-    .dock-shop-link { color: var(--blue); text-decoration: none; cursor: pointer; }
     .dock-metrics-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      gap: 6px;
-      background: #F9FAFB;
-      border-radius: 6px;
-      padding: 8px 10px;
+      gap: 0;
+      margin-top: 18px;
     }
-    .dock-metric-box small { display: block; font-size: 10px; color: var(--ink3); margin-bottom: 2px; }
+    .dock-metric-box { min-width: 0; padding: 0 10px; border-left: 1px solid var(--line); }
+    .dock-metric-box:first-child { padding-left: 0; border-left: 0; }
+    .dock-metric-box small { display: block; font-size: 12px; color: var(--ink3); margin-bottom: 6px; white-space: nowrap; }
     .dock-metric-box b {
       display: block;
-      font-size: 15px;
+      font-size: 20px;
       font-weight: 600;
       color: var(--ink);
       font-variant-numeric: tabular-nums;
@@ -524,11 +537,11 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-top: 10px;
+      margin-top: 16px;
     }
     .dock-link-btn {
-      height: 28px;
-      padding: 0 10px;
+      height: 32px;
+      padding: 0 12px;
       border: 1px solid var(--line);
       border-radius: 4px;
       background: #fff;
@@ -550,18 +563,29 @@
       display: flex;
       flex-direction: column;
       min-width: 0;
+      padding-left: 28px;
+      border-left: 1px solid var(--line);
     }
     .trend-head {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 8px;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin-bottom: 12px;
     }
     .trend-head-left {
       display: flex;
       align-items: center;
       gap: 12px;
+    }
+    .trend-head-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-left: auto;
     }
     .trend-title {
       font-size: 14px;
@@ -588,9 +612,27 @@
       background: #fff;
       font-weight: 500;
     }
+    .trend-range-switch {
+      display: inline-flex;
+      align-items: center;
+    }
+    .trend-range-btn {
+      height: 28px;
+      min-width: 54px;
+      padding: 0 10px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-left: 0;
+      color: var(--ink2);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .trend-range-btn:first-child { border-left: 1px solid var(--line); border-radius: 4px 0 0 4px; }
+    .trend-range-btn:last-child { border-radius: 0 4px 4px 0; }
+    .trend-range-btn.active { border-color: var(--red); color: var(--red); position: relative; z-index: 1; }
     .trend-svg-container {
-      flex: 1;
-      height: 140px;
+      flex: none;
+      height: 150px;
       width: 100%;
       position: relative;
       background: #fff;
@@ -598,6 +640,7 @@
     .trend-svg-container svg { width: 100%; height: 100%; display: block; }
     .trend-grid { stroke: #EEE; stroke-width: 1; }
     .trend-axis { fill: #777; font-size: 10px; }
+    .trend-area { fill: rgba(255,36,66,0.08); }
     .trend-line { fill: none; stroke: var(--red); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .trend-point { fill: #fff; stroke: var(--red); stroke-width: 2; cursor: pointer; }
     .trend-bar { fill: var(--red); opacity: 0.8; cursor: pointer; }
@@ -706,7 +749,7 @@
     .settings-runtime { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: var(--canvas); color: var(--ink3); font-size: 11px; }
 
     /* Shops view cards */
-    .shoplist { padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .shoplist { padding: 0; display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 8px; overflow: auto; }
     .shopcard { border: 1px solid var(--line-card); border-radius: 8px; background: #fff; overflow: hidden; }
     .shoprow { padding: 12px 14px; display: grid; grid-template-columns: 2fr 1fr 1.2fr 1.2fr 1.2fr 1fr 80px; gap: 10px; align-items: center; cursor: pointer; }
     .shoprow:hover { background: #FAFBFD; }
@@ -833,6 +876,6 @@
       <div class="trend-note" id="trendNote"></div>
     </section>
   </div>
-  <script src="/app.js?v=2.3.4"></script>
+  <script src="/app.js?v=2.3.5"></script>
 </body>
 </html>
