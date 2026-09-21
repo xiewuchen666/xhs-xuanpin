@@ -70,6 +70,9 @@ internal sealed class RuntimeCoordinator : IDisposable
     public Task<AndroidProductSummary?> GetCurrentProductSummaryAsync() =>
         _androidUi?.GetCurrentProductSummaryAsync() ?? Task.FromResult<AndroidProductSummary?>(null);
 
+    public Task<string?> GetCurrentProductUrlAsync() =>
+        _androidUi?.GetCurrentProductUrlAsync() ?? Task.FromResult<string?>(null);
+
     public Task CopyCurrentProductLinkAsync() =>
         _androidUi?.CopyCurrentProductLinkAsync() ?? throw new InvalidOperationException("Android 尚未连接");
 

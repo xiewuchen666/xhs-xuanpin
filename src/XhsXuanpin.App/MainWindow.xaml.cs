@@ -933,16 +933,26 @@ public partial class MainWindow : Window
         MonitorButton.IsEnabled = false;
         SelectionButton.IsEnabled = false;
         BridgeTitle.Text = addToSelection ? "正在加入选品中心" : "正在加入监控";
-        BridgeStatus.Text = "正在取得当前商品分享链接，请勿切换页面";
+        BridgeStatus.Text = "正在读取当前商品，请勿切换页面";
 
         try
         {
             if (!await _runtime.IsProductDetailAsync())
                 throw new InvalidOperationException("当前不是商品详情页，请先打开需要操作的商品");
 
-            var clipboardSequence = NativeMethods.GetClipboardSequenceNumber();
-            await _runtime.CopyCurrentProductLinkAsync();
-            var url = await WaitForFreshShareUrlAsync(clipboardSequence);
+            var url = await _runtime.GetCurrentProductUrlAsync();
+            if (url is null)
+            {
+                AppLogger.Warning("MainWindow", "Current product URL unavailable; using share fallback");
+                BridgeStatus.Text = "正在通过分享页取得商品链接，请勿切换页面";
+                var clipboardSequence = NativeMethods.GetClipboardSequenceNumber();
+                await _runtime.CopyCurrentProductLinkAsync();
+                url = await WaitForFreshShareUrlAsync(clipboardSequence);
+            }
+            else
+            {
+                AppLogger.Info("MainWindow", "Current product URL read from Android activity");
+            }
 
             var scope = addToSelection ? "selection" : "single";
             BridgeTitle.Text = "正在提交后台采集";

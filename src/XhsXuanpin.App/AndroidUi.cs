@@ -19,6 +19,12 @@ internal sealed class AndroidUi(string adbPath, string serial)
         return ParseProductSummary(page);
     }
 
+    public async Task<string?> GetCurrentProductUrlAsync()
+    {
+        var activities = await RunAsync("shell", "dumpsys", "activity", "activities");
+        return IsProductDetailActivity(activities) ? ParseProductUrl(activities) : null;
+    }
+
     public async Task CopyCurrentProductLinkAsync()
     {
         var page = await DumpAsync();
@@ -52,6 +58,17 @@ internal sealed class AndroidUi(string adbPath, string serial)
             return line.Contains("goodsdetail", StringComparison.OrdinalIgnoreCase);
         }
         return false;
+    }
+
+    internal static string? ParseProductUrl(string activities)
+    {
+        var match = Regex.Match(
+            activities ?? "",
+            @"xhsdiscover://goods_detail/([0-9a-f]{20,32})(?:[?\s}])",
+            RegexOptions.IgnoreCase);
+        return match.Success
+            ? $"https://www.xiaohongshu.com/goods-detail/{match.Groups[1].Value}"
+            : null;
     }
 
     internal static bool LooksLikeProductDetail(string document)
