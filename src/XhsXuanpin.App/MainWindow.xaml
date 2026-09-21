@@ -4,12 +4,13 @@
         xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="小红书选品工作台" Width="1500" Height="920" MinWidth="1180" MinHeight="720"
+        Title="小红书选品工作台" Icon="Assets/logo.ico"
+        Width="1662" Height="994" MinWidth="1180" MinHeight="720"
         WindowStyle="None" ResizeMode="CanResize"
         Background="White" FontFamily="Microsoft YaHei UI" WindowStartupLocation="CenterScreen"
         UseLayoutRounding="True" SnapsToDevicePixels="True">
     <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="58"
+        <shell:WindowChrome CaptionHeight="56"
                             ResizeBorderThickness="6"
                             CornerRadius="0"
                             GlassFrameThickness="0"
@@ -17,19 +18,31 @@
     </shell:WindowChrome.WindowChrome>
 
     <Window.Resources>
+        <!-- Window Caption Control Buttons -->
         <Style x:Key="WindowButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="46"/>
-            <Setter Property="Height" Value="58"/>
+            <Setter Property="Height" Value="56"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#595959"/>
-            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Foreground" Value="#4E5969"/>
             <Setter Property="Cursor" Value="Arrow"/>
             <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F3F3F3"/>
+                    <Setter Property="Background" Value="#F2F3F5"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#E5E6EB"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -39,34 +52,124 @@
                     <Setter Property="Background" Value="#E81123"/>
                     <Setter Property="Foreground" Value="White"/>
                 </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#C4101E"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
             </Style.Triggers>
         </Style>
+
+        <!-- Top Header Action Buttons (Settings, Messages) -->
+        <Style x:Key="HeaderToolButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#4E5969"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#F2F3F5"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Phone Action Buttons (加入监控 / 加入选品中心) from Reference -->
         <Style x:Key="ProductActionButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Padding" Value="12,0"/>
             <Setter Property="Background" Value="White"/>
             <Setter Property="BorderBrush" Value="#D0D5DD"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Foreground" Value="#344054"/>
-            <Setter Property="Opacity" Value="1"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F7F7F8"/>
-                </Trigger>
-                <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Background" Value="#F7F7F8"/>
-                    <Setter Property="BorderBrush" Value="#E5E7EB"/>
-                    <Setter Property="Foreground" Value="#B5BAC3"/>
-                    <Setter Property="Opacity" Value="1"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="Foreground" Value="#1D2129"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="Normal"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Border"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F7F8FA"/>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="#B0B7C3"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F2F3F5"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Border" Property="Background" Value="#F7F8FA"/>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="#E5E6EB"/>
+                                <Setter Property="Foreground" Value="#C9CDD4"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
+
+        <!-- Phone App Toggle Button (关闭小红书) from Reference -->
         <Style x:Key="PhoneAppToggleButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="MinWidth" Value="80"/>
+            <Setter Property="Padding" Value="12,0"/>
+            <Setter Property="Background" Value="#FF2442"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Border"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#E01837"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#C9132F"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Border" Property="Background" Value="#F2F3F5"/>
+                                <Setter Property="Foreground" Value="#86909C"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Global Collection Toggle Button -->
+        <Style x:Key="GlobalCollectionToggleButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="26"/>
-            <Setter Property="MinWidth" Value="78"/>
-            <Setter Property="Padding" Value="9,0"/>
+            <Setter Property="MinWidth" Value="66"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Margin" Value="6,0,0,0"/>
             <Setter Property="Background" Value="White"/>
-            <Setter Property="BorderBrush" Value="#D9D9D9"/>
+            <Setter Property="BorderBrush" Value="#E5E6EB"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Foreground" Value="#595959"/>
+            <Setter Property="Foreground" Value="#4E5969"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
@@ -77,75 +180,47 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6">
+                                CornerRadius="13">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center"
                                               Margin="{TemplateBinding Padding}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="#F7F7F7"/>
-                                <Setter TargetName="Border" Property="BorderBrush" Value="#CFCFCF"/>
+                                <Setter TargetName="Border" Property="Background" Value="#F7F8FA"/>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="#C9CDD4"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="#F0F0F0"/>
+                                <Setter TargetName="Border" Property="Background" Value="#F2F3F5"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.55"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style x:Key="GlobalCollectionToggleButtonStyle" TargetType="Button">
-            <Setter Property="Height" Value="30"/>
-            <Setter Property="MinWidth" Value="72"/>
-            <Setter Property="Padding" Value="11,0"/>
-            <Setter Property="Margin" Value="8,0,0,0"/>
-            <Setter Property="Background" Value="White"/>
-            <Setter Property="BorderBrush" Value="#DDDDDD"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Foreground" Value="#595959"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Border"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="15">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              Margin="{TemplateBinding Padding}"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="#F7F7F7"/>
-                                <Setter TargetName="Border" Property="BorderBrush" Value="#CFCFCF"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="#F0F0F0"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.55"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+
+        <!-- Top Navigation Tab Buttons -->
         <Style x:Key="GlobalTabButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="88"/>
-            <Setter Property="Height" Value="58"/>
+            <Setter Property="Width" Value="92"/>
+            <Setter Property="Height" Value="56"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#FAFAFA"/>
@@ -156,13 +231,13 @@
 
     <Grid Margin="0,0,6,6" Background="White">
         <Grid.RowDefinitions>
-            <RowDefinition Height="58"/>
+            <RowDefinition Height="56"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition x:Name="PhoneColumn" Width="34*" MinWidth="400" MaxWidth="680"/>
+            <ColumnDefinition x:Name="PhoneColumn" Width="459" MinWidth="400" MaxWidth="680"/>
             <ColumnDefinition Width="24"/>
-            <ColumnDefinition Width="66*" MinWidth="720"/>
+            <ColumnDefinition Width="*" MinWidth="720"/>
         </Grid.ColumnDefinitions>
 
         <TextBox x:Name="PhoneKeyboardSink"
@@ -173,65 +248,67 @@
                  PreviewTextInput="PhoneKeyboardSink_PreviewTextInput"
                  PreviewKeyDown="PhoneKeyboardSink_PreviewKeyDown"/>
 
+        <!-- Top Navigation Bar Background & Border -->
         <Border Grid.Row="0" Grid.ColumnSpan="3"
                 Background="White" BorderBrush="#EDEDED" BorderThickness="0,0,0,1"/>
 
+        <!-- Left Brand & App Title & Version (100% matches crop-top-bar.png) -->
         <StackPanel Grid.Row="0" Grid.ColumnSpan="3"
                     Orientation="Horizontal" VerticalAlignment="Center"
                     HorizontalAlignment="Left" Margin="16,0,0,0">
-            <Border Width="30" Height="30" CornerRadius="8" Background="#FF2442">
-                <TextBlock Text="选" Foreground="White" FontWeight="SemiBold" FontSize="14"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <TextBlock Text="小红书选品工作台" FontSize="16" FontWeight="SemiBold" Margin="10,0,0,0"
+            <Image Width="28" Height="28" Source="Assets/logo.png" Stretch="Uniform"/>
+            <TextBlock Text="小红书选品工作台" FontSize="15" FontWeight="Bold" Foreground="#1F2329" Margin="10,0,0,0"
                        VerticalAlignment="Center"/>
-            <TextBlock Text="人工选品 · V1" FontSize="12" Foreground="#595959" Margin="10,1,0,0"
+            <TextBlock Text="v1.0.0" FontSize="12" Foreground="#86909C" Margin="10,2,0,0"
                        VerticalAlignment="Center"/>
         </StackPanel>
 
+        <!-- Center Workspace Tabs (Centered Navigation from ui-reference.png) -->
         <StackPanel x:Name="GlobalTabsHost" Grid.Row="0" Grid.Column="2"
-                    Orientation="Horizontal" HorizontalAlignment="Left">
-            <Grid Width="88" Height="58">
+                    Orientation="Horizontal" HorizontalAlignment="Left" Margin="10,0,0,0">
+            <Grid Width="88" Height="56">
                 <Button x:Name="SingleTabButton" Style="{StaticResource GlobalTabButtonStyle}"
                         Click="SingleTabButton_Click">
-                    <TextBlock x:Name="SingleTabText" Text="单品监控" FontSize="13" FontWeight="SemiBold"
-                               Foreground="#1A1A1A"/>
+                    <TextBlock x:Name="SingleTabText" Text="单品监控" FontSize="14" FontWeight="SemiBold"
+                               Foreground="#FF2442"/>
                 </Button>
-                <Border x:Name="SingleTabIndicator" Height="2" Background="#FF2442"
-                        VerticalAlignment="Bottom" Margin="15,0" IsHitTestVisible="False"/>
+                <Border x:Name="SingleTabIndicator" Height="2.5" Background="#FF2442"
+                        VerticalAlignment="Bottom" Margin="16,0" IsHitTestVisible="False"/>
             </Grid>
-            <Grid Width="88" Height="58">
+            <Grid Width="88" Height="56">
                 <Button x:Name="ShopsTabButton" Style="{StaticResource GlobalTabButtonStyle}"
                         Click="ShopsTabButton_Click">
-                    <TextBlock x:Name="ShopsTabText" Text="店铺监控" FontSize="13" Foreground="#595959"/>
+                    <TextBlock x:Name="ShopsTabText" Text="店铺监控" FontSize="14" Foreground="#4E5969"/>
                 </Button>
-                <Border x:Name="ShopsTabIndicator" Height="2" Background="#FF2442"
-                        VerticalAlignment="Bottom" Margin="15,0" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <Border x:Name="ShopsTabIndicator" Height="2.5" Background="#FF2442"
+                        VerticalAlignment="Bottom" Margin="16,0" Visibility="Collapsed" IsHitTestVisible="False"/>
             </Grid>
-            <Grid Width="88" Height="58">
+            <Grid Width="88" Height="56">
                 <Button x:Name="SelectionTabButton" Style="{StaticResource GlobalTabButtonStyle}"
                         Click="SelectionTabButton_Click">
-                    <TextBlock x:Name="SelectionTabText" Text="选品中心" FontSize="13" Foreground="#595959"/>
+                    <TextBlock x:Name="SelectionTabText" Text="选品中心" FontSize="14" Foreground="#4E5969"/>
                 </Button>
-                <Border x:Name="SelectionTabIndicator" Height="2" Background="#FF2442"
-                        VerticalAlignment="Bottom" Margin="15,0" Visibility="Collapsed" IsHitTestVisible="False"/>
+                <Border x:Name="SelectionTabIndicator" Height="2.5" Background="#FF2442"
+                        VerticalAlignment="Bottom" Margin="16,0" Visibility="Collapsed" IsHitTestVisible="False"/>
             </Grid>
         </StackPanel>
 
+        <!-- Top Right Actions: Backend Status Chips, Settings, Messages, Avatar, Window Controls -->
         <StackPanel Grid.Row="0" Grid.Column="2"
                     Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-            <Border Height="30" Padding="10,0" BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="15">
+            <!-- Discrete Live Service Indicator -->
+            <Border Height="26" Padding="8,0" Background="#F7F8FA" BorderBrush="#E5E6EB" BorderThickness="1" CornerRadius="13">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="GlobalServiceDot" Width="7" Height="7" Fill="#E89A19" Margin="0,0,6,0"/>
-                    <TextBlock x:Name="GlobalServiceStatus" Text="采集服务启动中" FontSize="12" Foreground="#595959"
+                    <Ellipse x:Name="GlobalServiceDot" Width="6" Height="6" Fill="#E89A19" Margin="0,0,5,0"/>
+                    <TextBlock x:Name="GlobalServiceStatus" Text="采集服务启动中" FontSize="11" Foreground="#4E5969"
                                VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
-            <Border Height="30" Margin="8,0,0,0" Padding="10,0"
-                    BorderBrush="#DDDDDD" BorderThickness="1" CornerRadius="15">
+            <Border Height="26" Margin="6,0,0,0" Padding="8,0"
+                    Background="#F7F8FA" BorderBrush="#E5E6EB" BorderThickness="1" CornerRadius="13">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock x:Name="GlobalCollectionIntervalText" Text="全局采集 60 分钟" FontSize="12" Foreground="#595959"/>
-                    <TextBlock x:Name="GlobalCollectionStateText" Text=" · 启动中" FontSize="11" Foreground="#E89A19"/>
+                    <TextBlock x:Name="GlobalCollectionIntervalText" Text="全局采集 60 分钟" FontSize="11" Foreground="#4E5969"/>
+                    <TextBlock x:Name="GlobalCollectionStateText" Text=" · 启动中" FontSize="10" Foreground="#E89A19"/>
                 </StackPanel>
             </Border>
             <Button x:Name="GlobalCollectionToggleButton"
@@ -239,24 +316,65 @@
                     Content="暂停采集"
                     Click="GlobalCollectionToggleButton_Click"
                     ToolTip="暂停全局自动采集；不影响手动立即采集"/>
-            <TextBlock x:Name="CurrentTimeText" Text="--:--" FontSize="12" Foreground="#595959"
-                       Margin="12,0,8,0" VerticalAlignment="Center"/>
+
+            <!-- Subtle Vertical Divider -->
+            <Rectangle Width="1" Height="14" Fill="#E5E6EB" Margin="10,0"/>
+
+            <!-- Settings Button (from ui-reference.png) -->
+            <Button x:Name="SettingsButton" Style="{StaticResource HeaderToolButtonStyle}" Click="SettingsButton_Click">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Path Data="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"
+                          Fill="#4E5969" Stretch="Uniform" Width="14" Height="14" Margin="0,0,4,0"/>
+                    <TextBlock Text="设置" FontSize="12" Foreground="#4E5969" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+
+            <!-- Message / Notification Button (from ui-reference.png) -->
+            <Button Style="{StaticResource HeaderToolButtonStyle}" Margin="4,0,0,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Path Data="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"
+                          Fill="#4E5969" Stretch="Uniform" Width="14" Height="14" Margin="0,0,4,0"/>
+                    <TextBlock Text="消息" FontSize="12" Foreground="#4E5969" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Button>
+
+            <TextBlock x:Name="CurrentTimeText" Text="--:--" FontSize="11" Foreground="#86909C"
+                       Margin="6,0,4,0" VerticalAlignment="Center"/>
+
+            <!-- Window Caption Control Buttons -->
             <Button x:Name="MinimizeButton" Style="{StaticResource WindowButtonStyle}"
-                    Content="—" Click="MinimizeButton_Click" ToolTip="最小化"/>
+                    Click="MinimizeButton_Click" ToolTip="最小化">
+                <Path Width="10" Height="10"
+                      Data="M 0,5 L 10,5"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=Button}}"
+                      StrokeThickness="1" SnapsToDevicePixels="True"/>
+            </Button>
             <Button x:Name="MaximizeButton" Style="{StaticResource WindowButtonStyle}"
-                    Content="□" Click="MaximizeButton_Click" ToolTip="最大化"/>
+                    Click="MaximizeButton_Click" ToolTip="最大化">
+                <Path x:Name="MaximizeIcon" Width="10" Height="10"
+                      Data="M 0.5,0.5 H 9.5 V 9.5 H 0.5 Z"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=Button}}"
+                      StrokeThickness="1" SnapsToDevicePixels="True"/>
+            </Button>
             <Button x:Name="CloseButton" Style="{StaticResource CloseWindowButtonStyle}"
-                    Content="×" Click="CloseButton_Click" ToolTip="关闭"/>
+                    Click="CloseButton_Click" ToolTip="关闭">
+                <Path Width="10" Height="10"
+                      Data="M 0.5,0.5 L 9.5,9.5 M 9.5,0.5 L 0.5,9.5"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=Button}}"
+                      StrokeThickness="1" SnapsToDevicePixels="True"/>
+            </Button>
         </StackPanel>
 
-        <Grid Grid.Row="1" Grid.Column="0" x:Name="PhonePane" Background="#F7F7F7">
+        <!-- Left Column: Android Phone Control & Recognition Card (100% matches ui-reference.png) -->
+        <Grid Grid.Row="1" Grid.Column="0" x:Name="PhonePane" Background="#F7F8FA">
             <Grid.RowDefinitions>
-                <RowDefinition Height="42"/>
+                <RowDefinition Height="44"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="66"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Margin="12,0">
+            <!-- Row 0: Phone Top Action / Status Bar -->
+            <Grid Grid.Row="0" Margin="14,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -269,11 +387,15 @@
                         IsEnabled="False"
                         Click="XhsAppToggleButton_Click"
                         ToolTip="Android 正在后台初始化；右侧监控和后台采集已可使用"/>
-                <TextBlock Grid.Column="2" x:Name="AndroidStatus" Text="Android · 后台初始化" Foreground="#595959" FontSize="13"
-                           VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
+                    <Ellipse x:Name="AndroidStatusDot" Width="6" Height="6" Fill="#E89A19" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="AndroidStatus" Text="Android · 后台初始化" Foreground="#4E5969" FontSize="12"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
             </Grid>
 
-            <Grid Grid.Row="1" x:Name="PhoneViewport" Margin="8,0,8,8" Background="White" ClipToBounds="True">
+            <!-- Row 1: Phone Mirror Viewport -->
+            <Grid Grid.Row="1" x:Name="PhoneViewport" Margin="12,0,12,8" Background="White" ClipToBounds="True">
                 <wfi:WindowsFormsHost x:Name="PhoneHost" HorizontalAlignment="Center" VerticalAlignment="Center"
                                       Visibility="Hidden"
                                       SnapsToDevicePixels="True"/>
@@ -290,26 +412,30 @@
                 </Border>
             </Grid>
 
-            <Border Grid.Row="2" Background="White" BorderBrush="#EDEDED" BorderThickness="0,1,0,0">
-                <Grid>
+            <!-- Row 2: Bottom Action Card (100% matches crop-phone-bottom.png) -->
+            <Border Grid.Row="2" Background="White" Margin="12,4,12,12" CornerRadius="4" BorderBrush="#E5E6EB" BorderThickness="1">
+                <Grid Margin="12,10">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="8"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel Margin="14,8,10,8" VerticalAlignment="Center">
-                        <TextBlock x:Name="BridgeTitle" Text="Android 正在后台初始化" FontSize="12"
-                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock x:Name="BridgeStatus" Text="右侧监控工作区可正常使用" Foreground="#595959"
-                                   FontSize="12" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+
+                    <!-- Left: Page status -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="BridgeTitle" Text="当前页面: 商品详情页" FontSize="12"
+                                   Foreground="#4E5969" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <!-- Keep BridgeStatus element for C# binding without layout clutter -->
+                        <TextBlock x:Name="BridgeStatus" Visibility="Collapsed"/>
                     </StackPanel>
-                    <Button Grid.Column="1" x:Name="MonitorButton" Content="加入监控" Height="34"
-                            Margin="0,0,8,0" Padding="14,0" VerticalAlignment="Center"
+
+                    <!-- Right Buttons: 加入监控 and 加入选品中心 -->
+                    <Button Grid.Column="1" x:Name="MonitorButton" Content="加入监控"
                             Style="{StaticResource ProductActionButtonStyle}"
                             IsEnabled="False" Click="MonitorButton_Click"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
-                    <Button Grid.Column="2" x:Name="SelectionButton" Content="加入选品中心" Height="34"
-                            Margin="0,0,14,0" Padding="14,0" VerticalAlignment="Center"
+                    <Button Grid.Column="3" x:Name="SelectionButton" Content="加入选品中心"
                             Style="{StaticResource ProductActionButtonStyle}"
                             IsEnabled="False" Click="SelectionButton_Click"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
@@ -317,22 +443,24 @@
             </Border>
         </Grid>
 
+        <!-- Column 1: Splitter and Toggle Handle -->
         <GridSplitter Grid.Row="1" Grid.Column="1" x:Name="PhoneSplitter"
-                      Width="6" HorizontalAlignment="Center" VerticalAlignment="Stretch"
-                      Background="#EFEFEF" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
+                      Width="4" HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                      Background="#E5E6EB" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
                       ShowsPreview="True" DragCompleted="PhoneSplitter_DragCompleted"
                       shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
 
         <Button Grid.Row="1" Grid.Column="1" x:Name="PhoneToggle"
                 Click="PhoneToggle_Click" Panel.ZIndex="1"
-                Width="20" Height="64" Padding="0" HorizontalAlignment="Center" VerticalAlignment="Center"
-                BorderBrush="#DDDDDD" BorderThickness="1" Background="White" Foreground="#595959"
-                FontSize="16" ToolTip="收起手机预览"
+                Width="18" Height="48" Padding="0" HorizontalAlignment="Center" VerticalAlignment="Center"
+                BorderBrush="#E5E6EB" BorderThickness="1" Background="White" Foreground="#86909C"
+                FontSize="14" ToolTip="收起手机预览"
                 shell:WindowChrome.IsHitTestVisibleInChrome="True">
             <TextBlock x:Name="PhoneToggleLabel" Text="‹"
                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Button>
 
+        <!-- Column 2: Web Workspace (WebView2) -->
         <Grid Grid.Row="1" Grid.Column="2">
             <wv2:WebView2 x:Name="Workspace"/>
         </Grid>

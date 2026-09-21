@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
@@ -17,12 +18,13 @@ public partial class MainWindow : Window
     private static readonly HttpClient Http = new() { BaseAddress = new Uri("http://127.0.0.1:17861") };
     private readonly RuntimeCoordinator _runtime = new();
     private readonly System.Windows.Forms.Panel _phonePanel = new() { BackColor = System.Drawing.Color.FromArgb(36, 36, 36) };
+    private readonly System.Windows.Forms.NotifyIcon _trayIcon;
     private readonly DispatcherTimer _pageStateTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private NativeMethods.LowLevelMouseProc? _phoneMouseHookProc;
     private IntPtr _phoneMouseHook;
     private bool _phoneKeyboardActive;
     private bool _phoneVisible = true;
-    private GridLength _expandedPhoneWidth = new(34, GridUnitType.Star);
+    private GridLength _expandedPhoneWidth = new(459, GridUnitType.Pixel);
     private bool _workspaceReady;
     private bool _androidReady;
     private bool _androidInitializationFailed;
@@ -56,6 +58,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _trayIcon = CreateTrayIcon();
         PhoneHost.Child = _phonePanel;
         _phonePanel.Resize += (_, _) =>
         {
@@ -77,14 +80,82 @@ public partial class MainWindow : Window
             await RefreshPageStateAsync();
         };
         Loaded += MainWindow_Loaded;
+        Closing += MainWindow_Closing;
         UpdateWindowStateButton();
         Closed += (_, _) =>
         {
             AppLogger.Info("MainWindow", "Main window closed; disposing runtime");
+            var icon = _trayIcon.Icon;
+            _trayIcon.Visible = false;
+            _trayIcon.ContextMenuStrip?.Dispose();
+            _trayIcon.Dispose();
+            icon?.Dispose();
             _pageStateTimer.Stop();
             RemovePhoneMouseHook();
             _runtime.Dispose();
+            Workspace.Dispose();
+            PhoneHost.Dispose();
+            _phonePanel.Dispose();
         };
+    }
+
+    private System.Windows.Forms.NotifyIcon CreateTrayIcon()
+    {
+        var resource = System.Windows.Application.GetResourceStream(
+            new Uri("pack://application:,,,/Assets/logo.ico"))
+            ?? throw new InvalidOperationException("未找到应用图标资源");
+        using var stream = resource.Stream;
+        using var sourceIcon = new System.Drawing.Icon(stream);
+
+        var menu = new System.Windows.Forms.ContextMenuStrip();
+        var openItem = menu.Items.Add("打开主界面");
+        var exitItem = menu.Items.Add("退出程序");
+        var trayIcon = new System.Windows.Forms.NotifyIcon
+        {
+            ContextMenuStrip = menu,
+            Icon = (System.Drawing.Icon)sourceIcon.Clone(),
+            Text = "小红书选品工作台",
+            Visible = true
+        };
+
+        openItem.Click += (_, _) => Dispatcher.BeginInvoke(RestoreFromTray);
+        exitItem.Click += (_, _) => Dispatcher.BeginInvoke(
+            () => ((App)System.Windows.Application.Current).ExitApplication());
+        trayIcon.DoubleClick += (_, _) => Dispatcher.BeginInvoke(RestoreFromTray);
+        return trayIcon;
+    }
+
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (((App)System.Windows.Application.Current).IsExiting) return;
+        e.Cancel = true;
+        HideToTray();
+    }
+
+    private void HideToTray()
+    {
+        ShowInTaskbar = false;
+        Hide();
+        AppLogger.Info("MainWindow", "Main window hidden to notification area");
+    }
+
+    internal void RestoreFromTray()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(RestoreFromTray);
+            return;
+        }
+
+        if (!IsVisible) Show();
+        ShowInTaskbar = true;
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+        AppLogger.Info("MainWindow", "Main window restored from notification area");
     }
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -111,6 +182,7 @@ public partial class MainWindow : Window
             AppLogger.Error("MainWindow", "Workspace initialization failed", ex);
             _androidInitializationFailed = true;
             AndroidStatus.Text = "Android · 未启动";
+            AndroidStatusDot.Fill = System.Windows.Media.Brushes.IndianRed;
             GlobalServiceStatus.Text = "采集服务异常";
             GlobalServiceDot.Fill = System.Windows.Media.Brushes.IndianRed;
             BridgeTitle.Text = "工作台启动失败";
@@ -129,6 +201,7 @@ public partial class MainWindow : Window
             InstallPhoneMouseHook();
             _androidReady = true;
             AndroidStatus.Text = "Android · 已连接";
+            AndroidStatusDot.Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xB4, 0x2A));
             await RefreshXhsAppStateAsync(force: true);
             FitPhoneSurface();
             AppLogger.Info("MainWindow", "Android background initialization completed");
@@ -138,6 +211,7 @@ public partial class MainWindow : Window
             AppLogger.Error("MainWindow", "Android background initialization failed; workspace remains available", ex);
             _androidInitializationFailed = true;
             AndroidStatus.Text = "Android · 启动失败";
+            AndroidStatusDot.Fill = System.Windows.Media.Brushes.IndianRed;
             BridgeTitle.Text = "Android 暂不可用";
             BridgeStatus.Text = $"右侧监控和后台采集可继续使用；{ex.Message}";
             SetProductActionsVisible(false);
@@ -253,6 +327,21 @@ public partial class MainWindow : Window
         {
             _globalCollectionToggleBusy = false;
             UpdateGlobalCollectionToggleButton();
+        }
+    }
+
+    private async void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (Workspace?.CoreWebView2 is not null)
+            {
+                await Workspace.CoreWebView2.ExecuteScriptAsync("window.dispatchEvent(new CustomEvent('xhs-open-settings'))");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("MainWindow", "Open settings failed", ex);
         }
     }
 
@@ -808,11 +897,17 @@ public partial class MainWindow : Window
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
 
+    private static readonly System.Windows.Media.Geometry MaximizeGeometry =
+        System.Windows.Media.Geometry.Parse("M 0.5,0.5 H 9.5 V 9.5 H 0.5 Z");
+    private static readonly System.Windows.Media.Geometry RestoreGeometry =
+        System.Windows.Media.Geometry.Parse("M 2.5,0.5 H 9.5 V 7.5 H 7.5 M 0.5,2.5 H 7.5 V 9.5 H 0.5 Z");
+
     private void UpdateWindowStateButton()
     {
-        if (MaximizeButton is null) return;
-        MaximizeButton.Content = WindowState == WindowState.Maximized ? "❐" : "□";
-        MaximizeButton.ToolTip = WindowState == WindowState.Maximized ? "还原" : "最大化";
+        if (MaximizeButton is null || MaximizeIcon is null) return;
+        var isMax = WindowState == WindowState.Maximized;
+        MaximizeIcon.Data = isMax ? RestoreGeometry : MaximizeGeometry;
+        MaximizeButton.ToolTip = isMax ? "向下还原" : "最大化";
     }
 
     private async Task RefreshPageStateAsync()
@@ -835,6 +930,7 @@ public partial class MainWindow : Window
             {
                 FitPhoneSurface();
                 AndroidStatus.Text = "Android · 已连接";
+                AndroidStatusDot.Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xB4, 0x2A));
             }
 
             await RefreshXhsAppStateAsync();
@@ -891,6 +987,7 @@ public partial class MainWindow : Window
         {
             AppLogger.Warning("MainWindow", $"Android page state refresh failed; workspace remains available: {ex.Message}");
             AndroidStatus.Text = "Android · 连接异常";
+            AndroidStatusDot.Fill = System.Windows.Media.Brushes.IndianRed;
             SetProductActionsVisible(false);
             BridgeTitle.Text = "正在识别小红书页面";
             BridgeStatus.Text = "页面状态暂不可用，请稍后重试";

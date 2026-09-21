@@ -49,7 +49,11 @@ const autoEnabledInput = document.querySelector('#autoEnabledInput');
 const autoIntervalInput = document.querySelector('#autoIntervalInput');
 const midnightEnabledInput = document.querySelector('#midnightEnabledInput');
 const settingsRuntime = document.querySelector('#settingsRuntime');
+const dockCard = document.querySelector('#dockCard');
 
+let selectedProductId = null;
+let dockTrendMode = 'daily';
+let cachedTrends = {};
 let activeActionProductId = null;
 let activeActionContext = 'single';
 let activeTrendData = null;
@@ -131,7 +135,11 @@ function monitoredDuration(metric) {
 function monitoredMetricCell(metric, positiveAccent = false) {
   const base = metricCell(metric, positiveAccent);
   if (!metric?.partial || metric.value == null) return base;
-  return base + '<small class="metric-hint">加入后 · 已监控' + esc(monitoredDuration(metric)) + '</small>';
+  const hours = Number(metric.hours);
+  // 加入后已监控24小时（或四舍五入已达24小时），就不用再标注了
+  if (!Number.isFinite(hours) || hours >= 23.9 || Math.round(hours) >= 24) return base;
+  const durationStr = hours < 1 ? '<1h' : (Math.round(hours * 10) / 10) + 'h';
+  return base + '<small class="metric-hint" title="加入后已监控 ' + esc(monitoredDuration(metric)) + '">已监控 ' + esc(durationStr) + '</small>';
 }
 
 function rolling24Basis(metric) {
@@ -151,14 +159,14 @@ function intervalHint(hours) {
   const value = Number(hours);
   if (!Number.isFinite(value) || value < 0) return '';
   const rounded = Math.round(value * 10) / 10;
-  return (Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)) + ' 小时区间';
+  return (Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)) + 'h 区间';
 }
 
 function incrementCell(metric) {
   if (!metric || metric.value == null) return metricCell(metric);
   const base = metricCell(metric);
   const hint = intervalHint(metric.hours);
-  return base + (hint ? '<small class="metric-hint">' + esc(hint) + '</small>' : '');
+  return base + (hint ? '<small class="metric-hint" title="' + esc(hint) + '">' + esc(hint) + '</small>' : '');
 }
 
 function summaryMetric(products, key) {
@@ -170,19 +178,111 @@ function summaryMetric(products, key) {
   return formatSales(values.reduce((sum, value) => sum + value, 0));
 }
 
+function formatPriceNum(val) {
+  return val == null ? '—' : Number(val).toFixed(0);
+}
+
+function formatDateTime(dtStr) {
+  if (!dtStr) return '—';
+  const s = String(dtStr).replace('T', ' ');
+  if (s.length >= 16) {
+    const d = s.substring(0, 10);
+    const t = s.substring(11, 16);
+    return '<div style="line-height:1.35;"><div style="color:var(--ink2);font-size:12px;">' + d + '</div><div style="color:var(--ink3);font-size:11px;">' + t + '</div></div>';
+  }
+  return '<span style="color:var(--ink3);font-size:11px;">' + esc(s) + '</span>';
+}
+
+function formatFans(count) {
+  const num = Number(count);
+  if (!Number.isFinite(num) || num <= 0) return '';
+  if (num >= 10000) {
+    return (num / 10000).toFixed(1) + '万粉丝';
+  }
+  return num.toLocaleString('zh-CN') + '粉丝';
+}
+
+function getShopInfo(product) {
+  const name = product.shop_name || '店铺未识别';
+  const shop = (allShops || []).find(s =>
+    (s.shop_id && product.shop_id && s.shop_id === product.shop_id) ||
+    (s.shop_name && product.shop_name && s.shop_name === product.shop_name)
+  );
+  const rawRating = (shop && shop.rating != null && String(shop.rating).trim() !== '')
+    ? String(shop.rating).trim()
+    : (product.shop_rating != null && String(product.shop_rating).trim() !== '' ? String(product.shop_rating).trim() : null);
+  const rating = (rawRating && rawRating !== '0' && rawRating !== '0.0') ? rawRating : null;
+  const rawFans = (shop && shop.brand_fans_count != null) ? shop.brand_fans_count : product.brand_fans_count;
+  let fans = null;
+  if (rawFans != null && Number(rawFans) > 0) {
+    fans = formatFans(rawFans);
+  }
+  return { name, rating, fans };
+}
+
 function pageHeader(title, countText, subtitle, cards) {
   pageHead.innerHTML =
-    '<div class="titleline"><h1>' + esc(title) + '</h1><span class="count">' + esc(countText) + '</span></div>' +
-    '<div class="subtitle">' + esc(subtitle) + '</div>' +
-    '<div class="metrics">' +
-    cards.map(card =>
-      '<div class="metric"><span>' + esc(card.label) + '</span><b>' + esc(card.value) + '</b></div>'
-    ).join('') +
+    '<div class="page-title-row">' +
+      '<div class="page-title-left">' +
+        '<h1>' + esc(title) + '</h1>' +
+        '<div class="subtitle">' + esc(subtitle) + '</div>' +
+      '</div>' +
+      '<div class="page-title-actions">' +
+        '<button class="btn-export-primary" id="pageExportBtn" type="button">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
+          '导出数据' +
+        '</button>' +
+        '<button class="btn-collect-secondary" id="pageCollectBtn" type="button">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>' +
+          '立即采集' +
+        '</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="metrics-grid">' +
+      cards.map(c =>
+        '<div class="metric-card' + (c.filterKey !== undefined ? ' clickable-card' : '') + '"' +
+          (c.filterKey !== undefined ? ' data-status-filter="' + esc(c.filterKey) + '" title="点击按状态筛选"' : '') + '>' +
+          (c.iconSvg ? '<div class="metric-icon-box ' + (c.iconBoxClass || 'icon-box-red') + '">' + c.iconSvg + '</div>' : '') +
+          '<div class="metric-content">' +
+            '<div class="label">' + esc(c.label) + '</div>' +
+            '<div class="val">' + esc(c.value) + '</div>' +
+            (c.deltaHtml ? '<div class="delta">' + c.deltaHtml + '</div>' : '') +
+          '</div>' +
+        '</div>'
+      ).join('') +
     '</div>';
+
+  document.querySelectorAll('.metric-card[data-status-filter]').forEach(card => {
+    card.addEventListener('click', () => {
+      const sf = document.querySelector('#statusFilter');
+      if (sf) {
+        const targetVal = card.getAttribute('data-status-filter') || '';
+        sf.value = (sf.value === targetVal && targetVal !== '') ? '' : targetVal;
+        productPage = 1;
+        renderCurrentProductList();
+      }
+    });
+  });
+
+  document.querySelector('#pageExportBtn')?.addEventListener('click', openExportDialog);
+  document.querySelector('#pageCollectBtn')?.addEventListener('click', event => {
+    if (view === 'shops') collectVisibleShopProducts(event);
+    else collectVisibleProducts(event);
+  });
 }
 
 function productHeader(products, selectionMode = false) {
   const todayValues = products.map(p => metricValue(p.today)).filter(v => v != null);
+  const activeCount = selectionMode ? products.length : products.filter(p => p.monitor_state === 'active').length;
+  const todayCount = todayValues.length ? products.filter(p => Number(p.today?.value) > 0).length : 0;
+  const rollingTotal = summaryMetric(products, 'rolling24');
+  const abnormalCount = products.filter(p => p.monitor_state !== 'paused' && (['warning','danger'].includes(p.health) || Boolean(p.anomaly))).length;
+
+  const bagSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>';
+  const barSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>';
+  const clockSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+  const alertSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+
   pageHeader(
     selectionMode ? '选品中心' : '单品监控',
     products.length + ' 个商品',
@@ -190,10 +290,10 @@ function productHeader(products, selectionMode = false) {
       ? '展示已人工确认进入选品范围的商品；持续监控和指标口径与单品监控一致。'
       : '只展示你主动加入单品监控的商品；指标口径沿用已确认采集规则。',
     [
-      {label: selectionMode ? '选品商品' : '监控中', value: selectionMode ? String(products.length) : String(products.filter(p => p.monitor_state === 'active').length)},
-      {label: '今日有新增', value: todayValues.length ? String(products.filter(p => Number(p.today?.value) > 0).length) : '—'},
-      {label: '近24h新增合计', value: summaryMetric(products, 'rolling24')},
-      {label: '需关注', value: String(products.filter(p => p.monitor_state !== 'paused' && ['warning','danger'].includes(p.health)).length)}
+      { label: selectionMode ? '选品商品' : '监控中', value: String(activeCount), iconBoxClass: 'icon-box-red', iconSvg: bagSvg, filterKey: '' },
+      { label: '今日有新增', value: todayValues.length ? String(todayCount) : '—', iconBoxClass: 'icon-box-blue', iconSvg: barSvg },
+      { label: '近24h新增合计', value: rollingTotal, iconBoxClass: 'icon-box-blue', iconSvg: clockSvg },
+      { label: '异常商品', value: String(abnormalCount), iconBoxClass: 'icon-box-red', iconSvg: alertSvg, filterKey: 'warning' }
     ]
   );
 }
@@ -203,29 +303,55 @@ function productExternalHref(product) {
 }
 
 function productToolbar(products) {
-  const shops = [...new Set(products.map(p => (p.shop_name || '').trim()).filter(Boolean))]
-    .sort((a,b) => a.localeCompare(b, 'zh-CN'));
   toolbar.innerHTML =
-    '<label class="searchbox" aria-label="搜索商品或店铺"><span>⌕</span><input id="toolbarSearch" type="search" placeholder="搜索商品或店铺"></label>' +
-    '<select class="selectbox" id="shopFilter" aria-label="店铺筛选"><option value="">全部店铺</option>' +
-      shops.map(shop => '<option value="' + esc(shop) + '">' + esc(shop) + '</option>').join('') +
-    '</select>' +
+    '<label class="searchbox" aria-label="搜索商品或店铺">' +
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
+      '<input id="toolbarSearch" type="search" placeholder="搜索商品标题 / 店铺名称 / 商品链接">' +
+    '</label>' +
     '<select class="selectbox" id="sortSelect" aria-label="排序方式">' +
-      '<option value="rolling24_desc">近24h新增 ↓</option><option value="today_desc">今日新增 ↓</option>' +
-      '<option value="sales_desc">累计销量 ↓</option><option value="updated_desc">最近更新 ↓</option>' +
-    '</select><div class="grow"></div>' +
-    '<button class="btn" id="exportButton" type="button">⇩ 导出</button>' +
-    (view === 'single' ? '<button class="btn" id="addSingleProductButton" type="button">＋ 添加商品</button>' : '') +
-    '<button class="btn primary" id="collectPageButton" type="button">立即采集本页</button>' +
-    '<button class="btn" id="settingsButton" type="button">设置</button>';
+      '<option value="today_desc">排序: 今日新增 ↓</option>' +
+      '<option value="rolling24_desc">排序: 近24h新增 ↓</option>' +
+      '<option value="sales_desc">排序: 累计销量 ↓</option>' +
+      '<option value="updated_desc">最近更新 ↓</option>' +
+    '</select>' +
+    '<select class="selectbox" id="statusFilter" aria-label="状态筛选">' +
+      '<option value="">状态: 全部</option>' +
+      '<option value="active">状态: 正常</option>' +
+      '<option value="paused">状态: 已暂停</option>' +
+      '<option value="warning">状态: 异常</option>' +
+    '</select>' +
+    '<select class="selectbox" id="productPageSize" aria-label="每页条数">' +
+      '<option value="50"' + (productPageSize === 50 ? ' selected' : '') + '>每页: 50</option>' +
+      '<option value="30"' + (productPageSize === 30 ? ' selected' : '') + '>每页: 30</option>' +
+      '<option value="100"' + (productPageSize === 100 ? ' selected' : '') + '>每页: 100</option>' +
+    '</select>' +
+    '<div class="grow"></div>' +
+    '<button class="btn-tool" id="batchExportBtn" type="button">' +
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
+      '批量导出' +
+    '</button>' +
+    (view === 'single' ? '<button class="btn-tool" id="addSingleProductButton" type="button" style="color:var(--ink);font-weight:500;">＋ 添加商品</button>' : '') +
+    '<button class="btn-tool" id="toolbarSettingsBtn" type="button">' +
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' +
+      '设置' +
+    '</button>' +
+    '<button class="btn-tool" id="refreshBtn" type="button">' +
+      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>' +
+      '刷新' +
+    '</button>';
 
   document.querySelector('#toolbarSearch').addEventListener('input', () => { productPage = 1; renderCurrentProductList(); });
-  document.querySelector('#shopFilter').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
   document.querySelector('#sortSelect').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
-  document.querySelector('#exportButton').addEventListener('click', openExportDialog);
+  document.querySelector('#statusFilter').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
+  document.querySelector('#productPageSize').addEventListener('change', e => {
+    productPageSize = Number(e.target.value) || 50;
+    productPage = 1;
+    renderCurrentProductList();
+  });
+  document.querySelector('#batchExportBtn').addEventListener('click', openExportDialog);
   document.querySelector('#addSingleProductButton')?.addEventListener('click', () => openProductImport('single'));
-  document.querySelector('#collectPageButton').addEventListener('click', collectVisibleProducts);
-  document.querySelector('#settingsButton').addEventListener('click', openSettings);
+  document.querySelector('#toolbarSettingsBtn')?.addEventListener('click', openSettings);
+  document.querySelector('#refreshBtn').addEventListener('click', refreshCurrentViewData);
 }
 
 function metricNumber(product, key) {
@@ -243,19 +369,29 @@ function productUpdateTime(product) {
 
 function filterAndSortProducts(products) {
   const search = document.querySelector('#toolbarSearch');
-  const shop = document.querySelector('#shopFilter');
   const sort = document.querySelector('#sortSelect');
+  const status = document.querySelector('#statusFilter');
   const term = (search?.value || '').trim().toLowerCase();
-  const shopName = shop?.value || '';
+  const statusVal = status?.value || '';
+
   const result = products.filter(product => {
-    const haystack = ((product.title || '') + ' ' + (product.shop_name || '')).toLowerCase();
-    return (!term || haystack.includes(term)) && (!shopName || product.shop_name === shopName);
+    const haystack = ((product.title || '') + ' ' + (product.shop_name || '') + ' ' + (product.url || '')).toLowerCase();
+    const matchesTerm = !term || haystack.includes(term);
+    const isAbnormal = ['warning', 'danger'].includes(product.health) || Boolean(product.anomaly);
+    const matchesStatus = !statusVal || (
+      statusVal === 'paused'
+        ? product.monitor_state === 'paused'
+        : (statusVal === 'warning'
+            ? isAbnormal
+            : (product.monitor_state === 'active' && !isAbnormal))
+    );
+    return matchesTerm && matchesStatus;
   });
 
-  const sortKey = sort?.value || 'rolling24_desc';
-  if (sortKey === 'rolling24_desc') result.sort((a,b) => metricNumber(b,'rolling24') - metricNumber(a,'rolling24'));
-  else if (sortKey === 'today_desc') result.sort((a,b) => metricNumber(b,'today') - metricNumber(a,'today'));
-  else if (sortKey === 'sales_desc') result.sort((a,b) => metricNumber(b,'sales') - metricNumber(a,'sales'));
+  const sortKey = sort?.value || 'today_desc';
+  if (sortKey === 'today_desc') result.sort((a,b) => (metricNumber(b,'today') || 0) - (metricNumber(a,'today') || 0));
+  else if (sortKey === 'rolling24_desc') result.sort((a,b) => (metricNumber(b,'rolling24') || 0) - (metricNumber(a,'rolling24') || 0));
+  else if (sortKey === 'sales_desc') result.sort((a,b) => (metricNumber(b,'sales') || 0) - (metricNumber(a,'sales') || 0));
   else result.sort((a,b) => metricNumber(b,'updated') - metricNumber(a,'updated'));
   return result;
 }
@@ -264,49 +400,385 @@ function productRow(product, context) {
   const paused = product.monitor_state === 'paused';
   const selected = Number(product.in_selection_pool) === 1;
   const inShop = Number(product.in_shop_monitor) === 1;
-  const image = product.image_url
-    ? '<img src="' + esc(product.image_url) + '" alt="" referrerpolicy="no-referrer">'
-    : '<img alt="">';
-  const trendButton = '<button class="trend-btn" type="button" aria-label="查看成交趋势" title="成交趋势" data-trend-product-id="' + product.id + '">' +
-    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 15.5V4.5M3 15.5h14M5.5 12l3-3 2.5 2 4-5"/></svg></button>';
-  return '<tr data-product-id="' + product.id + '">' +
-      '<td><div class="product">' + image + '<div class="copy">' +
-      '<a class="product-title-link" href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer" title="' + esc(product.title) + '">' + esc(product.title) + '</a>' +
-      '<span title="' + esc(product.shop_name || '店铺未识别') + '">' + esc(product.shop_name || '店铺未识别') + '</span>' +
-      (selected && context !== 'selection' ? '<em class="selected">★ 已在选品中心</em>' : '') +
-      '</div></div></td>' +
-      '<td class="num">' + formatPrice(product.price) + '</td>' +
-      '<td class="num">' + totalSalesCell(product) + '</td>' +
-      '<td class="num">' + monitoredMetricCell(product.today, true) + '</td>' +
-      '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
-      '<td class="num">' + incrementCell(product.increment) + '</td>' +
-      '<td><span>' + esc(productUpdateTime(product) || '—') + '</span></td>' +
-      '<td><span class="status ' + (paused ? 'paused' : (product.health || 'active')) + '">' +
-        esc(paused ? '● 已暂停' : ('● ' + (product.health_label || '正常'))) + '</span></td>' +
-      '<td><div class="actions">' + trendButton + '<button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
-      'data-more-product-id="' + product.id + '" data-more-title="' + esc(product.title) + '" ' +
-      'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" ' +
-      'data-more-shop="' + (inShop ? '1' : '0') + '" data-more-context="' + esc(context) + '">···</button></div></td></tr>';
+  const isRowSelected = product.id === selectedProductId;
+  const shopInfo = getShopInfo(product);
+
+  const imgUrl = product.image_url || '';
+  const imgHtml = imgUrl
+    ? '<img src="' + esc(imgUrl) + '" alt="" referrerpolicy="no-referrer">'
+    : '<img alt="" style="background:#F2F3F5;">';
+
+  let shopSubParts = [];
+  if (shopInfo.rating) shopSubParts.push('<span class="star-rating">★ ' + esc(shopInfo.rating) + '</span>');
+  if (shopInfo.fans) shopSubParts.push('<span>' + esc(shopInfo.fans) + '</span>');
+  const shopSubHtml = shopSubParts.length > 0
+    ? '<div class="shop-sub">' + shopSubParts.join('<span style="color:var(--line);margin:0 2px;">|</span>') + '</div>'
+    : '';
+
+  return '<tr class="product-row ' + (isRowSelected ? 'selected-row' : '') + '" data-product-id="' + product.id + '">' +
+    '<td style="width:36px;"><input type="checkbox" class="row-checkbox" ' + (isRowSelected ? 'checked' : '') + ' onclick="event.stopPropagation()"></td>' +
+    '<td>' +
+      '<div class="product">' +
+        imgHtml +
+        '<div class="copy">' +
+          '<a class="product-title-link" href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer" title="' + esc(product.title) + '" onclick="event.stopPropagation()">' + esc(product.title) + '</a>' +
+          (selected && context !== 'selection' ? '<em class="selected">已在选品中心</em>' : '') +
+        '</div>' +
+      '</div>' +
+    '</td>' +
+    '<td>' +
+      '<div class="shop-cell">' +
+        '<span class="shop-name" title="' + esc(shopInfo.name) + '">' + esc(shopInfo.name) + '</span>' +
+        shopSubHtml +
+      '</div>' +
+    '</td>' +
+    '<td class="num">' + formatPrice(product.price) + '</td>' +
+    '<td class="num">' + totalSalesCell(product) + '</td>' +
+    '<td class="num">' + metricCell(product.today, true) + '</td>' +
+    '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
+    '<td class="num">' + incrementCell(product.increment) + '</td>' +
+    '<td>' + formatDateTime(productUpdateTime(product)) + '</td>' +
+    '<td>' +
+      '<span class="status ' + (paused ? 'paused' : (product.health || 'active')) + '">' +
+        esc(paused ? '● 已暂停' : ('● ' + (product.health_label || '正常'))) +
+      '</span>' +
+    '</td>' +
+    '<td style="text-align:center;">' +
+      '<div class="actions" style="justify-content:center;">' +
+        '<button class="more-btn" type="button" aria-label="商品操作" title="商品操作" ' +
+          'data-more-product-id="' + product.id + '" data-more-title="' + esc(product.title) + '" ' +
+          'data-more-paused="' + (paused ? '1' : '0') + '" data-more-selected="' + (selected ? '1' : '0') + '" ' +
+          'data-more-shop="' + (inShop ? '1' : '0') + '" data-more-context="' + esc(context) + '" onclick="event.stopPropagation()">···</button>' +
+      '</div>' +
+    '</td>' +
+  '</tr>';
 }
 
 function renderProductTable(products, context, total) {
+  const scrollWrap = document.querySelector('.tablewrap');
+  const mainWrap = document.querySelector('main');
+  const savedScrollTop = scrollWrap ? scrollWrap.scrollTop : null;
+  const savedScrollLeft = scrollWrap ? scrollWrap.scrollLeft : null;
+  const savedMainScrollTop = mainWrap ? mainWrap.scrollTop : null;
+
+  if (!products.some(product => product.id === selectedProductId)) {
+    selectedProductId = products[0]?.id ?? null;
+  }
   const pager = renderProductPager(total);
   if (!products.length) {
-    content.innerHTML = '<div class="empty">' +
+    content.innerHTML = '<div class="empty" style="padding:40px 0;text-align:center;color:var(--ink3);">' +
       (context === 'selection' ? '选品中心还没有符合当前条件的商品。' : '没有符合当前条件的商品。') +
       '</div>' + pager;
+    if (dockCard) dockCard.hidden = true;
     bindProductPager();
     return;
   }
+
   content.innerHTML =
     '<div class="tablewrap"><table><thead><tr>' +
-    '<th style="width:24%">商品 / 店铺</th><th style="width:7%">当前价</th><th style="width:9%">累计销量</th>' +
-    '<th style="width:9%">今日新增</th><th style="width:9%">近24小时新增</th><th style="width:10%">最近区间新增</th>' +
-    '<th style="width:12%">最近更新</th><th style="width:8%">状态</th><th style="width:6%">操作</th>' +
-    '</tr></thead><tbody>' + products.map(product => productRow(product, context)).join('') + '</tbody></table></div>' +
+    '<th style="width:36px;"></th>' +
+    '<th style="min-width:200px;">商品</th>' +
+    '<th style="width:130px;">店铺</th>' +
+    '<th style="width:80px;">当前价格</th>' +
+    '<th style="width:85px;">累计销量</th>' +
+    '<th style="width:85px;">今日新增</th>' +
+    '<th style="width:105px;">近24小时新增</th>' +
+    '<th style="width:100px;">最近区间新增</th>' +
+    '<th style="width:125px;">最近更新时间</th>' +
+    '<th style="width:78px;">状态</th>' +
+    '<th style="width:50px;text-align:center;">操作</th>' +
+    '</tr></thead><tbody>' +
+    products.map(product => productRow(product, context)).join('') +
+    '</tbody></table></div>' +
     pager;
+
   bindProductPager();
+  bindTableEvents();
+
+  if (savedScrollTop !== null) {
+    const newScrollWrap = document.querySelector('.tablewrap');
+    if (newScrollWrap) {
+      newScrollWrap.scrollTop = savedScrollTop;
+      newScrollWrap.scrollLeft = savedScrollLeft;
+    }
+  }
+  if (savedMainScrollTop !== null) {
+    const newMainWrap = document.querySelector('main');
+    if (newMainWrap) newMainWrap.scrollTop = savedMainScrollTop;
+  }
+
+  const selectedProduct = products.find(p => p.id === selectedProductId) || products[0];
+  if (selectedProduct) {
+    renderDockPanel(selectedProduct);
+  } else if (dockCard) {
+    dockCard.hidden = true;
+  }
 }
+
+function renderProductPager(total) {
+  const pages = Math.max(1, Math.ceil(total / productPageSize));
+  productPage = Math.min(productPage, pages);
+
+  let pageBtnsHtml = '';
+  if (pages <= 7) {
+    for (let p = 1; p <= pages; p++) {
+      pageBtnsHtml += '<button class="page-btn ' + (p === productPage ? 'active' : '') + '" data-page="' + p + '">' + p + '</button>';
+    }
+  } else {
+    const start = Math.max(1, Math.min(productPage - 2, pages - 4));
+    const end = Math.min(pages, start + 4);
+    if (start > 1) {
+      pageBtnsHtml += '<button class="page-btn ' + (1 === productPage ? 'active' : '') + '" data-page="1">1</button>';
+      if (start > 2) pageBtnsHtml += '<span class="pager-ellipsis">...</span>';
+    }
+    for (let p = start; p <= end; p++) {
+      pageBtnsHtml += '<button class="page-btn ' + (p === productPage ? 'active' : '') + '" data-page="' + p + '">' + p + '</button>';
+    }
+    if (end < pages) {
+      if (end < pages - 1) pageBtnsHtml += '<span class="pager-ellipsis">...</span>';
+      pageBtnsHtml += '<button class="page-btn ' + (pages === productPage ? 'active' : '') + '" data-page="' + pages + '">' + pages + '</button>';
+    }
+  }
+
+  return '<div class="pager">' +
+    '<div class="pager-left">共 ' + total + ' 条数据，已选择 1 条</div>' +
+    '<div class="pager-right">' +
+      '<button class="page-btn" id="productPrev"' + (productPage <= 1 ? ' disabled' : '') + '>‹</button>' +
+      pageBtnsHtml +
+      '<button class="page-btn" id="productNext"' + (productPage >= pages ? ' disabled' : '') + '>›</button>' +
+      '<div class="pager-goto">前往 <input type="text" class="pager-goto-input" id="pagerGotoInput" value="' + productPage + '"> 页</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function bindTableEvents() {
+  document.querySelectorAll('.product-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const id = Number(row.dataset.productId);
+      if (!id) return;
+      selectedProductId = id;
+      document.querySelectorAll('.product-row').forEach(r => {
+        const isTarget = Number(r.dataset.productId) === id;
+        r.classList.toggle('selected-row', isTarget);
+        const cb = r.querySelector('.row-checkbox');
+        if (cb) cb.checked = isTarget;
+      });
+      const prod = allProducts.find(p => p.id === id);
+      if (prod) renderDockPanel(prod);
+    });
+  });
+
+  document.querySelectorAll('.row-checkbox').forEach(checkbox => {
+    checkbox.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      checkbox.closest('.product-row')?.click();
+    });
+  });
+
+  document.querySelectorAll('.more-btn').forEach(btn => {
+    btn.addEventListener('click', () => openActionPanel(btn));
+  });
+}
+
+function renderDockPanel(product) {
+  if (!dockCard || !product) return;
+  dockCard.hidden = false;
+  const shopInfo = getShopInfo(product);
+  const imgUrl = product.image_url || '';
+  const imgHtml = imgUrl
+    ? '<img src="' + esc(imgUrl) + '" alt="" referrerpolicy="no-referrer" class="dock-thumb">'
+    : '<div class="dock-thumb" style="display:grid;place-items:center;color:#aaa;">图</div>';
+
+  const todayVal = product.today?.value;
+  const rolling24Val = product.rolling24?.value;
+  const priceDisplay = formatPrice(product.price);
+  const totalDisplay = product.total_sales != null ? formatSales(product.total_sales) : '—';
+  const todayDisplay = todayVal != null ? (Number(todayVal) > 0 ? '+' : '') + formatSales(todayVal) : '—';
+  const rolling24Display = rolling24Val != null ? (Number(rolling24Val) > 0 ? '+' : '') + formatSales(rolling24Val) : '—';
+
+  let dockShopSubs = [];
+  if (shopInfo.rating) dockShopSubs.push('<span class="star-rating">★ ' + esc(shopInfo.rating) + '</span>');
+  if (shopInfo.fans) dockShopSubs.push('<span>' + esc(shopInfo.fans) + '</span>');
+  const dockSubHtml = dockShopSubs.length > 0
+    ? dockShopSubs.join('<span style="color:var(--line);margin:0 4px;">|</span>') + '<span style="color:var(--line);margin:0 4px;">|</span>'
+    : '';
+
+  dockCard.innerHTML =
+    '<div class="dock-detail">' +
+      '<div>' +
+        '<div class="dock-title-line">商品详情 (已选择 1 个商品)</div>' +
+        '<div class="dock-detail-body">' +
+          imgHtml +
+          '<div class="dock-info">' +
+            '<div>' +
+              '<div class="dock-product-title" title="' + esc(product.title) + '">' + esc(product.title) + '</div>' +
+              '<div class="dock-shop-row">' +
+                '<span style="font-weight:500;color:var(--ink);">' + esc(shopInfo.name) + '</span>' +
+                dockSubHtml +
+                '<a class="dock-shop-link" href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer">查看商品 &gt;</a>' +
+              '</div>' +
+            '</div>' +
+            '<div class="dock-metrics-grid">' +
+              '<div class="dock-metric-box"><small>当前价格</small><b class="red">' + priceDisplay + '</b></div>' +
+              '<div class="dock-metric-box"><small>累计销量</small><b>' + totalDisplay + '</b></div>' +
+              '<div class="dock-metric-box"><small>今日新增</small><b class="red">' + todayDisplay + '</b></div>' +
+              '<div class="dock-metric-box"><small>近24小时新增</small><b class="red">' + rolling24Display + '</b></div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="dock-links-row">' +
+        '<a href="' + esc(productExternalHref(product)) + '" target="_blank" rel="noopener noreferrer" class="dock-link-btn">' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
+          '在小红书打开' +
+        '</a>' +
+        '<button id="dockCopyLinkBtn" type="button" class="dock-link-btn">' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>' +
+          '复制链接' +
+        '</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="dock-trend">' +
+      '<div class="trend-head">' +
+        '<div class="trend-head-left">' +
+          '<span class="trend-title">成交趋势</span>' +
+          '<div class="trend-mode-switch">' +
+            '<button class="trend-mode-btn ' + (dockTrendMode === 'daily' ? 'active' : '') + '" type="button" data-dock-mode="daily">日销量</button>' +
+            '<button class="trend-mode-btn ' + (dockTrendMode === 'hourly' ? 'active' : '') + '" type="button" data-dock-mode="hourly">小时销量</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="trend-summary-text" id="dockTrendSummary"></div>' +
+      '</div>' +
+      '<div class="trend-svg-container" id="dockTrendSvgWrap">' +
+        '<div style="height:100%;display:grid;place-items:center;color:var(--ink3);font-size:12px;">正在加载走势图…</div>' +
+      '</div>' +
+      '<div class="trend-note" id="dockTrendNote"></div>' +
+    '</div>';
+
+  document.querySelector('#dockCopyLinkBtn')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(product.url || '');
+      showNotice('商品链接已复制到剪贴板', 'success');
+    } catch (_) {
+      showNotice('复制失败，请手动复制', 'error');
+    }
+  });
+
+  document.querySelectorAll('[data-dock-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      dockTrendMode = btn.dataset.dockMode;
+      renderDockPanel(product);
+    });
+  });
+
+  loadAndRenderDockTrend(product);
+}
+
+async function loadAndRenderDockTrend(product) {
+  const container = document.querySelector('#dockTrendSvgWrap');
+  const summaryEl = document.querySelector('#dockTrendSummary');
+  const noteEl = document.querySelector('#dockTrendNote');
+  if (!container) return;
+
+  let trend = cachedTrends[product.id];
+  if (!trend) {
+    try {
+      trend = await api('/api/products/' + product.id + '/trend');
+      cachedTrends[product.id] = trend;
+    } catch (_) {
+      trend = null;
+    }
+  }
+  if (Number(selectedProductId) !== Number(product.id)) return;
+
+  const points = (dockTrendMode === 'daily' ? trend?.daily : trend?.hourly) || [];
+  const valid = points.filter(point => point.value != null && Number.isFinite(Number(point.value)));
+  const gapPoints = dockTrendMode === 'hourly'
+    ? points.filter(point => point.gap && Number.isFinite(Number(point.average_hourly)))
+    : [];
+
+  if (noteEl) {
+    noteEl.textContent = dockTrendMode === 'daily'
+      ? '日销量按每日 23:55 基线计算；今日为截至最近一次有效采集的未完整数据。'
+      : '小时销量只显示普通全局采集区间；23:55 基线采样不展示，缺采用灰色虚线柱提示。';
+  }
+
+  if (!valid.length && !gapPoints.length) {
+    if (summaryEl) summaryEl.textContent = '暂无可计算的趋势点';
+    container.innerHTML = '<div class="trend-empty" style="height:100%;display:grid;place-items:center;color:var(--ink3);font-size:12px;">采集历史不足，或当前区间存在待确认数据。</div>';
+    return;
+  }
+
+  const width = 560, height = 135, left = 48, right = 16, top = 14, bottom = 24;
+  const innerWidth = width - left - right, innerHeight = height - top - bottom;
+  const chartValues = valid.map(point => Number(point.value)).concat(gapPoints.map(point => Number(point.average_hourly)));
+  const maximum = Math.max(...chartValues, 1);
+  const xAt = index => dockTrendMode === 'hourly'
+    ? left + innerWidth * (index + 0.5) / points.length
+    : (points.length === 1 ? left + innerWidth / 2 : left + innerWidth * index / (points.length - 1));
+  const yAt = value => top + innerHeight - innerHeight * Number(value) / maximum;
+  const coordinates = points.map((point, index) => point.value == null ? null : {point, x:xAt(index), y:yAt(point.value)});
+  const segments = [];
+  let segment = [];
+  coordinates.forEach(coordinate => {
+    if (coordinate) segment.push(coordinate);
+    else if (segment.length) { segments.push(segment); segment = []; }
+  });
+  if (segment.length) segments.push(segment);
+
+  const grid = Array.from({length:4}, (_, index) => {
+    const value = maximum * (3 - index) / 3;
+    const y = top + innerHeight * index / 3;
+    return '<line x1="' + left + '" y1="' + y + '" x2="' + (width - right) + '" y2="' + y + '" class="trend-grid"/>' +
+      '<text x="' + (left - 8) + '" y="' + (y + 3) + '" text-anchor="end" class="trend-axis">' + esc(Math.round(value).toLocaleString('zh-CN')) + '</text>';
+  }).join('');
+
+  const labelIndexes = [...new Set([0, Math.round((points.length - 1) / 3), Math.round((points.length - 1) * 2 / 3), points.length - 1])];
+  const labels = labelIndexes.map(index =>
+    '<text x="' + xAt(index) + '" y="' + (height - 6) + '" text-anchor="middle" class="trend-axis">' + esc(points[index]?.label || '') + '</text>'
+  ).join('');
+
+  const lines = dockTrendMode === 'daily' ? segments.map(items =>
+    '<polyline points="' + items.map(item => item.x + ',' + item.y).join(' ') + '" class="trend-line"/>'
+  ).join('') : '';
+
+  const circles = dockTrendMode === 'daily' ? coordinates.filter(Boolean).map(item => {
+    const point = item.point;
+    const period = point.date + (point.partial ? '（未完整）' : '');
+    return '<circle cx="' + item.x + '" cy="' + item.y + '" r="3.5" class="trend-point"><title>' +
+      esc(period + '：+' + formatSales(point.value) + (point.reason ? '，' + point.reason : '')) + '</title></circle>';
+  }).join('') : '';
+
+  const barWidth = Math.max(6, Math.min(20, innerWidth / Math.max(points.length, 1) * 0.65));
+  const bars = dockTrendMode === 'hourly' ? points.map((point, index) => {
+    const gap = point.gap && Number.isFinite(Number(point.average_hourly));
+    if (!gap && (point.value == null || !Number.isFinite(Number(point.value)))) return '';
+    const value = gap ? Number(point.average_hourly) : Number(point.value);
+    const barHeight = Math.max(2, innerHeight * value / maximum);
+    const detail = gap
+      ? (point.from_time || '—') + ' 至 ' + point.time + '：区间共新增 +' + formatSales(point.gap_total) +
+        '，平均每小时 ' + value.toLocaleString('zh-CN') + '（仅区间平均）'
+      : (point.from_time || '—') + ' 至 ' + point.time + '：+' + formatSales(point.value) + (point.reason ? '，' + point.reason : '');
+    return '<rect x="' + (xAt(index) - barWidth / 2) + '" y="' + (top + innerHeight - barHeight) +
+      '" width="' + barWidth + '" height="' + barHeight + '" rx="2" class="trend-bar' + (gap ? ' trend-bar-gap' : '') + '"><title>' +
+      esc(detail) + '</title></rect>';
+  }).join('') : '';
+
+  const latest = valid[valid.length - 1];
+  const regularMaximum = valid.length ? Math.max(...valid.map(point => Number(point.value))) : null;
+  if (summaryEl) {
+    summaryEl.textContent = '有效点 ' + valid.length + ' 个' +
+      (latest ? ' · 最近 +' + formatSales(latest.value) : '') +
+      (regularMaximum != null ? ' · 最高 +' + formatSales(regularMaximum) : '') +
+      (gapPoints.length ? ' · 缺采 ' + gapPoints.length + ' 个' : '');
+  }
+
+  const chartLabel = dockTrendMode === 'daily' ? '商品日销量折线图' : '商品小时销量柱状图';
+  container.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="' + chartLabel + '">' +
+    grid + labels + lines + circles + bars + '</svg>';
+}
+
 
 function currentProductSource() {
   return allProducts;
@@ -320,20 +792,6 @@ function currentFilteredProducts() {
   return filterAndSortProducts(currentProductSource());
 }
 
-function renderProductPager(total) {
-  const pages = Math.max(1, Math.ceil(total / productPageSize));
-  productPage = Math.min(productPage, pages);
-  const start = total ? (productPage - 1) * productPageSize + 1 : 0;
-  const end = Math.min(total, productPage * productPageSize);
-  return '<div class="pager">' +
-    '<span>每页</span><select class="selectbox pager-size" id="productPageSize">' +
-      [30,50,100].map(size => '<option value="' + size + '"' + (productPageSize === size ? ' selected' : '') + '>' + size + '</option>').join('') +
-    '</select><span>共 ' + total + ' 个 · ' + start + '-' + end + '</span><div class="grow"></div>' +
-    '<button class="btn" id="productPrev" type="button"' + (productPage <= 1 ? ' disabled' : '') + '>‹</button>' +
-    '<span class="page-current">' + productPage + ' / ' + pages + '</span>' +
-    '<button class="btn" id="productNext" type="button"' + (productPage >= pages ? ' disabled' : '') + '>›</button></div>';
-}
-
 function currentProductPageItems() {
   const products = currentFilteredProducts();
   const pages = Math.max(1, Math.ceil(products.length / productPageSize));
@@ -343,10 +801,11 @@ function currentProductPageItems() {
 }
 
 function bindProductPager() {
-  document.querySelector('#productPageSize')?.addEventListener('change', event => {
-    productPageSize = Number(event.target.value) || 30;
-    productPage = 1;
-    renderCurrentProductList();
+  document.querySelectorAll('.page-btn[data-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      productPage = Number(btn.dataset.page);
+      renderCurrentProductList();
+    });
   });
   document.querySelector('#productPrev')?.addEventListener('click', () => {
     if (productPage > 1) {
@@ -361,6 +820,21 @@ function bindProductPager() {
       renderCurrentProductList();
     }
   });
+  const gotoInput = document.querySelector('#pagerGotoInput');
+  if (gotoInput) {
+    const handleGoto = () => {
+      const val = parseInt(gotoInput.value, 10);
+      const pages = Math.max(1, Math.ceil(currentFilteredProducts().length / productPageSize));
+      if (!isNaN(val) && val >= 1 && val <= pages) {
+        productPage = val;
+        renderCurrentProductList();
+      } else {
+        gotoInput.value = productPage;
+      }
+    };
+    gotoInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleGoto(); });
+    gotoInput.addEventListener('blur', handleGoto);
+  }
 }
 
 function renderCurrentProductList() {
@@ -376,6 +850,7 @@ function renderCurrentProductList() {
 }
 
 async function loadSinglePage({keepNotice = false} = {}) {
+  cachedTrends = {};
   allProducts = await api('/api/products');
   productHeader(allProducts, false);
   productToolbar(allProducts);
@@ -384,6 +859,7 @@ async function loadSinglePage({keepNotice = false} = {}) {
 }
 
 async function loadSelectionPage({keepNotice = false} = {}) {
+  cachedTrends = {};
   allProducts = await api('/api/selection');
   productHeader(allProducts, true);
   productToolbar(allProducts);
@@ -398,15 +874,20 @@ function aggregateShopHeader(key) {
 }
 
 function shopsHeader() {
+  const shopSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>';
+  const bagSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>';
+  const barSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>';
+  const clockSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+
   pageHeader(
     '店铺监控',
     allShops.length + ' 家店铺',
     '仅汇总你主动监控商品所属店铺，不自动采集整店商品。',
     [
-      {label:'监控店铺', value:String(allShops.length)},
-      {label:'监控商品', value:String(allShops.reduce((sum,shop) => sum + Number(shop.product_count || 0), 0))},
-      {label:'今日新增汇总', value:aggregateShopHeader('today')},
-      {label:'近24h新增汇总', value:aggregateShopHeader('rolling24')}
+      { label: '监控店铺', value: String(allShops.length), iconBoxClass: 'icon-box-red', iconSvg: shopSvg },
+      { label: '监控商品', value: String(allShops.reduce((sum,shop) => sum + Number(shop.product_count || 0), 0)), iconBoxClass: 'icon-box-blue', iconSvg: bagSvg },
+      { label: '今日新增汇总', value: aggregateShopHeader('today'), iconBoxClass: 'icon-box-blue', iconSvg: barSvg },
+      { label: '近24h新增汇总', value: aggregateShopHeader('rolling24'), iconBoxClass: 'icon-box-red', iconSvg: clockSvg }
     ]
   );
 }
@@ -587,8 +1068,8 @@ async function collectProducts(products, button, scope = 'all') {
   }
 }
 
-async function collectVisibleProducts() {
-  const button = document.querySelector('#collectPageButton');
+async function collectVisibleProducts(event) {
+  const button = event?.currentTarget || document.querySelector('#pageCollectBtn');
   await collectProducts(
     currentProductPageItems(),
     button,
@@ -596,8 +1077,8 @@ async function collectVisibleProducts() {
   );
 }
 
-async function collectVisibleShopProducts() {
-  const button = document.querySelector('#collectShopPageButton');
+async function collectVisibleShopProducts(event) {
+  const button = event?.currentTarget || document.querySelector('#pageCollectBtn');
   const productsById = new Map();
   currentShopPageItems().forEach(shop => (shop.products || []).forEach(product => productsById.set(product.id, product)));
   await collectProducts([...productsById.values()], button, 'shop');
@@ -908,6 +1389,7 @@ async function saveSettings() {
 
 async function refreshCurrentViewData() {
   if (!actionOverlay.hidden || !trendOverlay.hidden || !settingsOverlay.hidden || !shopImportOverlay.hidden || !exportOverlay.hidden) return;
+  cachedTrends = {};
   if (view === 'single') {
     allProducts = await api('/api/products');
     productHeader(allProducts, false);
@@ -1244,6 +1726,10 @@ window.addEventListener('xhs-import-queued', event => {
   watchImportJob(jobId);
 });
 
+window.addEventListener('xhs-open-settings', () => {
+  openSettings();
+});
+
 reloadCurrentView(false).catch(error => {
   showNotice(error.message || '本地服务暂不可用，请查看启动状态。', 'error');
   content.innerHTML = '<div class="empty">页面加载失败</div>';
@@ -1251,4 +1737,4 @@ reloadCurrentView(false).catch(error => {
 
 setInterval(() => {
   refreshCurrentViewData().catch(() => {});
-}, 15000);
+}, 30000);

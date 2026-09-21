@@ -47,11 +47,15 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/")
     def index():
-        return send_from_directory(WEB_DIR, "index.html")
+        res = send_from_directory(WEB_DIR, "index.html")
+        res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return res
 
     @app.get("/app.js")
     def script():
-        return send_from_directory(WEB_DIR, "app.js")
+        res = send_from_directory(WEB_DIR, "app.js")
+        res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return res
 
     @app.get("/health")
     def health():

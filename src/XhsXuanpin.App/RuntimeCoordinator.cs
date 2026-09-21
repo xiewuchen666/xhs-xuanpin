@@ -232,10 +232,11 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (!await AdbReadyAsync()) return false;
         try
         {
-            var output = await RunAsync(_adb, "-s", Serial, "shell", "pidof", "com.xingin.xhs");
-            return !string.IsNullOrWhiteSpace(output);
+            var output = await RunAsync(
+                _adb, "-s", Serial, "shell", "dumpsys", "activity", "processes", "com.xingin.xhs");
+            return output.Contains(":com.xingin.xhs/", StringComparison.Ordinal);
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
         {
             return false;
         }
@@ -246,14 +247,15 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (!await AdbReadyAsync()) return false;
         try
         {
-            var output = await RunAsync(_adb, "-s", Serial, "shell", "dumpsys", "activity", "activities");
+            var output = await RunAsync(
+                _adb, "-s", Serial, "shell", "dumpsys", "activity", "activities", "com.xingin.xhs");
             return output
                 .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                 .Any(line =>
                     line.Contains("topResumedActivity=", StringComparison.Ordinal) &&
                     line.Contains("com.xingin.xhs/", StringComparison.Ordinal));
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
         {
             return false;
         }

@@ -987,9 +987,90 @@ The V1 visual and interaction direction for this project has been explicitly con
 Before implementing or modifying UI, also read:
 
 - `design/visual-contract.md` — confirmed project-level visual and interaction constraints.
-- `design/mockup.html` — confirmed core-page design mockup.
-- `design/screenshots/` — static reference renders.
+- `ui-reference.png` — **唯一的商业级视觉与排版验收标准（Single Source of Truth）**。
 
-For this project, `design/visual-contract.md` takes precedence when it narrows or overrides the general guidance in this document.
+---
 
-Do not independently replace the confirmed style, layout skeleton, typography floor, gray-text contrast, phone-panel behavior, or export interaction. Any change to confirmed parts must be shown for review first and written back into the design contract only after user confirmation.
+## 20. 商业级工作台视觉规范与标准锁定（基于 `ui-reference.png`）
+
+> **生效日期**：2026-09-21
+> **唯一参考文件**：根目录 `ui-reference.png`
+> **核心原则**：在不改变现有技术栈（WPF + WebView2 + HTML/CSS/JS）、不改变业务逻辑、不改变数据结构、不改变采集逻辑的前提下，100% 还原商业化工作台质感。
+
+### 20.1 全局色彩与材质系统 (Color Tokens)
+- **品牌红 (Brand Red)**: `#FF2442` (用于选品中心高亮、活跃Tab下划线、主按钮、折线图核心走势线、爆款标记)
+- **品牌红淡底 (Red Soft)**: `#FFF1F3` (用于采集中徽章背景、爆款标签背景、图标底色)
+- **品牌红淡边 (Red Soft Border)**: `#FFD6DC`
+- **主画布背景 (Canvas)**: `#F5F6F8` (微冷灰，提升白卡片立体感)
+- **纯白表面 (Surface)**: `#FFFFFF` (卡片、表格容器、工具栏、底抽屉)
+- **主文字 (Ink Primary)**: `#1F2329` (标题、表头、关键数值)
+- **次级文字 (Ink Secondary)**: `#4E5969` / `#646A73` (店铺名、普通指标说明)
+- **辅助说明 (Ink Tertiary)**: `#8F959E` (副标题、更新时间、未选中状态)
+- **分割线与边框 (Borders)**: `#E5E6EB` / `#EAECEF`
+- **增长绿 (Growth Green)**: `#10B981` (Android连接状态、商品识别成功对勾)
+- **警告黄 (Warning Amber)**: `#F59E0B` (星级评分、告警项)
+- **品类标签色**:
+  - 爆款/火爆: 背景 `#FFF1F3` / 文字 `#FF2442`
+  - 母婴/数码: 背景 `#E8F4FF` / 文字 `#1890FF`
+  - 时尚/美妆: 背景 `#F5EEFF` / 文字 `#722ED1`
+
+### 20.2 窗口外壳与顶栏 (Window Chrome & Navigation)
+- **顶栏高度**: 56px，纯白背景，底边框 `1px solid #EAECEF`。
+- **左侧产品标识**:
+  - 红底圆角图标 (32x32px, 8px 圆角, `#FF2442`)，白色粗体「选」字；
+  - 产品主标题「小红书选品工作台」(16px / 600)；
+  - 版本标签「v2.3.0」(浅灰胶囊背景 `#F2F3F5`，文字 `#8F959E`，11px)。
+- **中间主导航 Tabs**:
+  - `单品监控`、`店铺监控`、`选品中心`；
+  - 激活态字体加粗，颜色 `#FF2442`，底部 3px 品牌红指示条；未激活态 `#4E5969`。
+- **右侧功能区**:
+  - 「设置」图标按钮、「消息」图标按钮（带未读红点）；
+  - 个人头像与用户身份「邓鑫小李 ˅」；
+  - Windows 11 风格的最小化、最大化/还原、关闭窗口按钮。
+
+### 20.3 左侧手机投屏容器 (Phone Container)
+- **宽度**: 约 400–410px。
+- **顶部操作条**:
+  - 左侧: 红底白字圆角按钮「关闭小红书」(6px 圆角, `#FF2442`)；
+  - 右侧: 状态指示「● Android · 已连接」(绿色小圆点 `#10B981`，文字 `#4E5969`)。
+- **手机预览窗**:
+  - 8px 圆角内嵌视窗，等比展示小红书真机画面，无变形拉伸。
+- **底部智能浮动卡**:
+  - 白色圆角卡片，内边框 `1px solid #E5E6EB`；
+  - 左侧状态文字「当前页面: 商品详情页」、绿色勾选「✓ 已识别为商品」；
+  - 右侧并列两枚中性高质感圆角按钮：「加入监控」与「加入选品中心」。
+
+### 20.4 右侧数据工作区看板与控制台
+- **页面主标题行**:
+  - 左侧: 22px 加粗标题「单品监控」+ 12px 弱灰副标题「监控已加入商品的销量变化与趋势表现，实时掌握爆款动态」；
+  - 右侧: 红底白字「导出数据」(带下载托盘图标)、白底中性边框「立即采集」(带采集图标)、胶囊徽章「● 采集中」(粉底红字)。
+- **4 张核心 KPI 指标卡 (Metrics Cards)**:
+  - 4 卡等宽排布，8px 圆角，纯白背景，微阴影；
+  - 左侧配微圆角背景图标 (粉底购物袋、蓝底柱状图、蓝底时钟、红底三角感叹号)；
+  - 中间大号加粗数值 (24px, Tabular Nums)；
+  - 底部指标动态「较昨日 +12 ↑」「较昨日 +1.8% ↑」等。
+- **多维筛选工具栏**:
+  - 搜索框: 放大镜图标 +「搜索商品标题 / 店铺名称 / 商品链接」；
+  - 下拉筛选:「排序: 今日新增 ˅」「状态: 全部 ˅」「每页: 50 ˅」；
+  - 右侧次级按钮:「批量导出」「刷新」。
+
+### 20.5 高保真商品表格 (Data Table)
+- **表头**: 浅灰无边框低噪排版，字段包含：`[ ]`、`商品`、`店铺`、`当前价格`、`累计销量`、`今日新增`、`近24小时新增`、`最近7日新增`、`最近更新时间`、`操作`。
+- **商品单元格**: 44x44px 微圆角商品主图 + 标题 + 衍生品类徽章 (如 `爆款`、`母婴` 等)。
+- **店铺单元格**: 店铺名 + 黄星 `★ 4.89` + 粉丝量 `12.6万粉丝`。
+- **数值单元格**: 全面应用等宽数字排版，高增长项红色加重显示。
+- **操作列**: 统一提供浅蓝文字链「详情」「加入选品」与「···」更多操作。
+- **行交互**: 点击行激活选中态，高亮展示，并同步联动底部详情与趋势图。
+- **底部分页**: 左侧展示「共 128 条数据，已选择 1 条」，右侧分页控件包含当前激活红底方块「1」、页码「2 3 4 5 ... 9」与「前往 [ 1 ] 页」。
+
+### 20.6 底部 Master-Detail 联动面板 (Detail & Trend Dock)
+- **左右分栏容器**: 位于表格正下方，纯白卡片，8px 圆角，微边框。
+- **左半部「商品详情 (已选择 1 个商品)」**:
+  - 商品高清大图 (90x90px) + 标题 + 标签；
+  - 店铺信息 + 评分 + 粉丝 +「进入店铺 >」文字链；
+  - 横排指标：当前价格、累计销量、今日新增 (红)、近24小时新增 (红)；
+  - 底部操作栏：「在小红书打开」「复制链接」「统计链接」「更多操作 ˅」。
+- **右半部「成交趋势」**:
+  - 顶栏:「成交趋势」标题 + 模式切换「按天累计销量 / 24小时内销量」+ 时间跨度切换「近7天 (激活红)」「近30天」「自定义」；
+  - 图表区: 纯原生 SVG 绘制的平滑贝塞尔曲线，红色描边 (`#FF2442`) + 红色渐变透明底色面积图；
+  - 悬浮交互: 鼠标移入关键节点展示浮动气泡（如 `03-15  累计销量: 23,482`）。
