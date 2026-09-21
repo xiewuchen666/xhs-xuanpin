@@ -944,25 +944,21 @@ public partial class MainWindow : Window
             await _runtime.CopyCurrentProductLinkAsync();
             var url = await WaitForFreshShareUrlAsync(clipboardSequence);
 
-            BridgeTitle.Text = "正在执行首次真实采集";
-            BridgeStatus.Text = url;
-            using var collectResponse = await Http.PostAsJsonAsync(
-                "/api/products/collect",
-                new { url, scope = addToSelection ? "selection" : "single" });
-            var result = await collectResponse.Content.ReadFromJsonAsync<CollectResponse>();
-            if (!collectResponse.IsSuccessStatusCode || result?.ok != true)
+            var scope = addToSelection ? "selection" : "single";
+            BridgeTitle.Text = "正在提交后台采集";
+            BridgeStatus.Text = "取得链接成功，即将返回商品浏览";
+            using var importResponse = await Http.PostAsJsonAsync(
+                "/api/products/import",
+                new { text = url, scope });
+            var result = await importResponse.Content.ReadFromJsonAsync<ImportResponse>();
+            if (!importResponse.IsSuccessStatusCode || result?.ok != true || !result.queued)
                 throw new InvalidOperationException(result?.error ?? "采集失败");
 
-            BridgeTitle.Text = result.message ?? (addToSelection ? "已加入选品中心" : "已加入监控");
-            BridgeStatus.Text = result.duplicate
-                ? "该商品已存在，原有商品数据和历史采样均未修改"
-                : result.restored
-                    ? "已恢复对应监控关系，原有商品数据和历史采样均未修改"
-                : addToSelection
-                    ? "商品已进入持续监控，并加入选品中心"
-                    : "真实商品已写入独立数据库";
+            BridgeTitle.Text = addToSelection ? "选品任务已提交" : "监控任务已提交";
+            BridgeStatus.Text = $"后台任务 #{result.job_id} 正在采集，可以继续浏览下一个商品";
             _pageMessageHoldUntilUtc = DateTime.UtcNow.AddSeconds(3);
-            await Workspace.ExecuteScriptAsync("window.dispatchEvent(new Event('xhs-product-collected'))");
+            await Workspace.ExecuteScriptAsync(
+                $"window.dispatchEvent(new CustomEvent('xhs-import-queued', {{ detail: {{ jobId: {result.job_id} }} }}))");
         }
         catch (Exception ex)
         {
@@ -1018,7 +1014,7 @@ public partial class MainWindow : Window
         host.EndsWith(".xiaohongshu.com", StringComparison.OrdinalIgnoreCase);
 
     private sealed record WorkspaceMessage(string? type, string? module, string? format, JsonElement rows);
-    private sealed record CollectResponse(bool ok, int product_id, bool duplicate, bool restored, string? message, string? error);
+    private sealed record ImportResponse(bool ok, int job_id, bool queued, int count, string? error);
     private sealed record ActionResponse(bool ok, string? error);
     private sealed record ScheduledJobResponse(string id, string? next_run_time);
     private sealed record LatestJobResponse(int id, string status);

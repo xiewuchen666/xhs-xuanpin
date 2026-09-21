@@ -306,6 +306,45 @@ class PhaseTwoApiTests(unittest.TestCase):
         self.assertEqual(shop["brand_notes_count"], 321)
         self.assertEqual(shop["product_count"], 1)
 
+    def test_product_import_queues_requested_monitor_scope(self):
+        for scope in ("single", "shop", "selection"):
+            with self.subTest(scope=scope):
+                response = self.client.post(
+                    "/api/products/import",
+                    json={
+                        "scope": scope,
+                        "text": f"复制后打开小红书 https://xhslink.com/m/import-{scope} 查看商品",
+                    },
+                )
+                self.assertEqual(response.status_code, 202)
+                body = response.get_json()
+                self.assertEqual(body["scope"], scope)
+                self.assertEqual(body["count"], 1)
+
+                imported = payload(
+                    f"import-{scope}",
+                    f"{scope}-导入商品",
+                    "2026-09-18 12:00:00",
+                    shop_id=f"shop-{scope}",
+                    shop_name=f"{scope}-店铺",
+                )
+                self.assertTrue(jobs.process_next(lambda _url, data=imported: data))
+                job = jobs.get_job(body["job_id"])
+                product_id = job["items"][0]["product_id"]
+                self.assertEqual(db.is_in_single_monitor(product_id), scope == "single")
+                self.assertEqual(db.is_in_shop_monitor(product_id), scope == "shop")
+                self.assertEqual(
+                    product_id in [row["id"] for row in db.list_selection_products()],
+                    scope == "selection",
+                )
+
+        invalid = self.client.post(
+            "/api/products/import",
+            json={"scope": "all", "text": "https://xhslink.com/m/invalid-scope"},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.get_json()["error"], "无效加入范围")
+
     def test_shop_import_duplicate_link_does_not_overwrite_product(self):
         response = self.client.post(
             "/api/shops/import",

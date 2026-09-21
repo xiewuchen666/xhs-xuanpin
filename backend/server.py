@@ -252,17 +252,30 @@ def create_app(testing: bool = False) -> Flask:
         except (TypeError, ValueError) as exc:
             return _api_error(str(exc))
 
+    def queue_import(scope: str, text: str):
+        if scope not in {"single", "shop", "selection"}:
+            raise ValueError("无效加入范围")
+        urls = collector.extract_share_urls(text)
+        if not urls:
+            raise ValueError("未识别到小红书商品链接；可以直接粘贴商品链接或包含链接的分享口令/分享文本")
+        if len(urls) > 100:
+            raise ValueError("每次最多添加 100 个商品链接")
+        job_id = jobs.enqueue(scope, urls=urls, kind="import")
+        return jsonify(ok=True, job_id=job_id, queued=True, count=len(urls), scope=scope), 202
+
+    @app.post("/api/products/import")
+    def import_products():
+        try:
+            body = request.get_json(silent=True) or {}
+            return queue_import(str(body.get("scope") or "single").strip(), body.get("text", ""))
+        except ValueError as exc:
+            return _api_error(str(exc))
+
     @app.post("/api/shops/import")
     def import_shop_products():
         try:
             body = request.get_json(silent=True) or {}
-            urls = collector.extract_share_urls(body.get("text", ""))
-            if not urls:
-                raise ValueError("未识别到小红书商品链接；可以直接粘贴商品链接或包含链接的分享口令/分享文本")
-            if len(urls) > 100:
-                raise ValueError("每次最多添加 100 个商品链接")
-            job_id = jobs.enqueue("shop", urls=urls, kind="import")
-            return jsonify(ok=True, job_id=job_id, queued=True, count=len(urls)), 202
+            return queue_import("shop", body.get("text", ""))
         except ValueError as exc:
             return _api_error(str(exc))
 

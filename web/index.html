@@ -60,12 +60,12 @@
   <div class="action-overlay" id="shopImportOverlay" hidden>
     <section class="import-panel" role="dialog" aria-modal="true" aria-labelledby="shopImportTitle">
       <div class="action-panel-head">
-        <div class="action-panel-copy"><h2 id="shopImportTitle">添加店铺监控商品</h2><p>粘贴商品分享链接，或直接粘贴包含链接的小红书分享口令/分享文本。</p></div>
+        <div class="action-panel-copy"><h2 id="shopImportTitle">添加商品</h2><p>粘贴商品分享链接，或直接粘贴包含链接的小红书分享口令/分享文本。</p></div>
         <button class="action-close" id="shopImportClose" type="button" aria-label="关闭">×</button>
       </div>
       <div style="margin-top:16px">
         <textarea class="import-text" id="shopImportText" placeholder="例如：复制小红书商品分享文本到这里，可一次粘贴多个商品。"></textarea>
-        <div class="import-hint">系统会采集商品信息，并按真实店铺 ID 自动归入对应店铺；不会自动抓取该店其他商品。</div>
+        <div class="import-hint" id="shopImportHint">系统会在后台采集商品信息并加入当前监控范围。</div>
         <div class="settings-actions">
           <button class="btn" id="shopImportCancel" type="button">取消</button>
           <button class="btn primary" id="shopImportSubmit" type="button">提交添加</button>

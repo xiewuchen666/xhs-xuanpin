@@ -31,6 +31,8 @@ const shopImportClose = document.querySelector('#shopImportClose');
 const shopImportCancel = document.querySelector('#shopImportCancel');
 const shopImportSubmit = document.querySelector('#shopImportSubmit');
 const shopImportText = document.querySelector('#shopImportText');
+const shopImportTitle = document.querySelector('#shopImportTitle');
+const shopImportHint = document.querySelector('#shopImportHint');
 
 const exportOverlay = document.querySelector('#exportOverlay');
 const exportClose = document.querySelector('#exportClose');
@@ -59,6 +61,8 @@ let productPage = 1;
 let productPageSize = 30;
 let shopPage = 1;
 let shopPageSize = 30;
+let importScope = 'shop';
+const watchedImportJobs = new Set();
 
 function showNotice(message, type = '') {
   notice.textContent = message;
@@ -211,6 +215,7 @@ function productToolbar(products) {
       '<option value="sales_desc">累计销量 ↓</option><option value="updated_desc">最近更新 ↓</option>' +
     '</select><div class="grow"></div>' +
     '<button class="btn" id="exportButton" type="button">⇩ 导出</button>' +
+    (view === 'single' ? '<button class="btn" id="addSingleProductButton" type="button">＋ 添加商品</button>' : '') +
     '<button class="btn primary" id="collectPageButton" type="button">立即采集本页</button>' +
     '<button class="btn" id="settingsButton" type="button">设置</button>';
 
@@ -218,6 +223,7 @@ function productToolbar(products) {
   document.querySelector('#shopFilter').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
   document.querySelector('#sortSelect').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
   document.querySelector('#exportButton').addEventListener('click', openExportDialog);
+  document.querySelector('#addSingleProductButton')?.addEventListener('click', () => openProductImport('single'));
   document.querySelector('#collectPageButton').addEventListener('click', collectVisibleProducts);
   document.querySelector('#settingsButton').addEventListener('click', openSettings);
 }
@@ -420,7 +426,7 @@ function shopsToolbar() {
   document.querySelector('#toolbarSearch').addEventListener('input', () => { shopPage = 1; renderShopList(); });
   document.querySelector('#shopSort').addEventListener('change', () => { shopPage = 1; renderShopList(); });
   document.querySelector('#exportButton').addEventListener('click', openExportDialog);
-  document.querySelector('#addShopProductButton').addEventListener('click', openShopImport);
+  document.querySelector('#addShopProductButton').addEventListener('click', () => openProductImport('shop'));
   document.querySelector('#collectShopPageButton').addEventListener('click', collectVisibleShopProducts);
   document.querySelector('#settingsButton').addEventListener('click', openSettings);
 }
@@ -761,14 +767,52 @@ function closeShopImport() {
   shopImportOverlay.hidden = true;
 }
 
-function openShopImport() {
+function openProductImport(scope) {
+  importScope = scope;
+  const shopMode = scope === 'shop';
+  shopImportTitle.textContent = shopMode ? '添加店铺监控商品' : '添加单品监控商品';
+  shopImportHint.textContent = shopMode
+    ? '系统会采集商品信息，并按真实店铺 ID 自动归入对应店铺；不会自动抓取该店其他商品。'
+    : '系统会在后台采集商品信息并加入单品监控；提交后可以继续操作。';
   shopImportOverlay.hidden = false;
   shopImportText.value = '';
   shopImportSubmit.disabled = false;
   shopImportText.focus();
 }
 
-async function submitShopImport() {
+async function watchImportJob(jobId) {
+  jobId = Number(jobId);
+  if (!jobId || watchedImportJobs.has(jobId)) return;
+  watchedImportJobs.add(jobId);
+  try {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const result = await api('/api/jobs/' + jobId);
+      const job = result.job;
+      if (!['success','partial','failed','blocked','cancelled','interrupted'].includes(job.status)) continue;
+
+      await reloadCurrentView(true);
+      const failed = (job.items || []).find(item => ['failed','cancelled','interrupted'].includes(item.status));
+      if (job.status === 'success') {
+        const label = {single:'单品监控', shop:'店铺监控', selection:'选品中心'}[job.scope] || '目标范围';
+        const itemMessage = job.items?.length === 1 ? job.items[0].message : '';
+        showNotice(
+          itemMessage && itemMessage !== '已保存观测记录' ? itemMessage + '。' : '商品已采集并加入' + label + '。',
+          'success'
+        );
+      } else {
+        showNotice(failed?.message || job.error || '添加任务未全部完成，请查看任务状态。', 'error');
+      }
+      return;
+    }
+  } catch (error) {
+    showNotice(error.message || '无法获取添加任务状态，请稍后查看列表。', 'error');
+  } finally {
+    watchedImportJobs.delete(jobId);
+  }
+}
+
+async function submitProductImport() {
   const text = shopImportText.value.trim();
   if (!text) {
     showNotice('请先粘贴商品分享链接或分享口令。', 'error');
@@ -777,17 +821,19 @@ async function submitShopImport() {
   shopImportSubmit.disabled = true;
   shopImportSubmit.textContent = '提交中…';
   try {
-    const result = await api('/api/shops/import', {
+    const result = await api('/api/products/import', {
       method:'POST',
-      body:JSON.stringify({text})
+      body:JSON.stringify({text, scope:importScope})
     });
     closeShopImport();
+    const label = importScope === 'shop' ? '店铺监控' : '单品监控';
     showNotice(
-      '店铺监控添加任务 #' + result.job_id + ' 已提交，共识别 ' + result.count + ' 个商品；采集后会自动按所属店铺归类。',
+      label + '添加任务 #' + result.job_id + ' 已提交，共识别 ' + result.count + ' 个商品；后台采集中，可以继续操作。',
       'success'
     );
+    watchImportJob(result.job_id);
   } catch (error) {
-    showNotice(error.message || '添加店铺监控商品失败', 'error');
+    showNotice(error.message || '添加商品失败', 'error');
   } finally {
     shopImportSubmit.disabled = false;
     shopImportSubmit.textContent = '提交添加';
@@ -1151,7 +1197,7 @@ shopImportOverlay.addEventListener('click', event => {
 });
 shopImportClose.addEventListener('click', closeShopImport);
 shopImportCancel.addEventListener('click', closeShopImport);
-shopImportSubmit.addEventListener('click', submitShopImport);
+shopImportSubmit.addEventListener('click', submitProductImport);
 
 exportOverlay.addEventListener('click', event => {
   if (event.target === exportOverlay) closeExportDialog();
@@ -1192,10 +1238,10 @@ document.addEventListener('keydown', event => {
   else if (!actionOverlay.hidden) closeActionPanel();
 });
 
-window.addEventListener('xhs-product-collected', () => {
-  reloadCurrentView(true)
-    .then(() => showNotice('商品数据已写入，当前页面已刷新。', 'success'))
-    .catch(() => showNotice('本地服务暂不可用，请查看启动状态。', 'error'));
+window.addEventListener('xhs-import-queued', event => {
+  const jobId = Number(event.detail?.jobId);
+  showNotice('添加任务 #' + jobId + ' 已提交，后台采集中，可以继续浏览。', 'success');
+  watchImportJob(jobId);
 });
 
 reloadCurrentView(false).catch(error => {
