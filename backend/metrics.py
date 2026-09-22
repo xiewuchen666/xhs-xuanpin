@@ -251,14 +251,14 @@ def boundary_metric(
     return interval(base, end, rows, base["_time"] != target)
 
 
-def estimated_today_metric(
+def estimated_day_metric(
     rows: List[Dict[str, Any]],
     effective: List[Dict[str, Any]],
     midnight: datetime,
     latest: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    if not latest or latest["_time"] < midnight + timedelta(hours=2):
-        result = missing("午夜基线缺失，等待02:00兜底采样")
+    if not latest or latest["_time"] < midnight + timedelta(hours=1):
+        result = missing("午夜基线缺失，等待01:00后的恢复采样")
         result["baseline_missing"] = True
         return result
     if any(
@@ -269,24 +269,60 @@ def estimated_today_metric(
     ):
         return missing("午夜基线存在但当前区间不可计算", "anomaly")
 
-    at_23 = nearest(effective, midnight - timedelta(hours=1), 30, midnight)
-    at_02 = nearest(effective, midnight + timedelta(hours=2), 30, latest["_time"])
-    measured = interval(at_23, at_02, rows) if at_23 and at_02 else missing("缺少23:00或02:00有效采样")
-    if measured["value"] is None:
-        result = missing("午夜基线缺失，且23:00-02:00兜底端点不可用")
+    at_23 = nearest(
+        [row for row in effective if not row.get("is_midnight")],
+        midnight - timedelta(hours=1),
+        30,
+        midnight,
+    )
+    if not at_23:
+        result = missing("午夜基线缺失，且缺少有效的23:00参考采样")
         result["baseline_missing"] = True
         return result
 
-    delta = int(measured["value"])
-    estimated_increment = 0 if delta < 3 else delta // 3
-    result = interval(at_02, latest, rows, approximate=True)
-    if result["value"] is not None:
-        result.update(
-            value=estimated_increment + int(result["value"]),
-            estimated=True,
-            baseline_missing=True,
-            reason="午夜基线缺失；以02:00为基线，并补入23:00-02:00新增的三分之一，余数舍弃，少于3单按0单",
-        )
+    reference_sales = int(at_23["total_sales"])
+    recovery = next(
+        (
+            row
+            for row in rows
+            if exact_counter(row)
+            and not row.get("is_midnight")
+            and row.get("_counter_state") == "stable"
+            and midnight + timedelta(hours=1) <= row["_time"] <= latest["_time"]
+            and int(row["total_sales"]) >= reference_sales
+        ),
+        None,
+    )
+    if not recovery:
+        result = missing("午夜基线缺失，等待销量恢复到23:00参考值")
+        result["baseline_missing"] = True
+        return result
+
+    result = interval(recovery, latest, rows, approximate=True)
+    if result["value"] is None:
+        result["baseline_missing"] = True
+        return result
+
+    # ponytail: fixed product heuristic; revisit only with multi-day error evidence.
+    estimated_baseline = reference_sales + (int(recovery["total_sales"]) - reference_sales) * 7 // 10
+    value = int(latest["total_sales"]) - estimated_baseline
+    if value < 0:
+        result = missing("恢复后销量再次低于估算午夜基线，暂不计算", "anomaly")
+        result["baseline_missing"] = True
+        return result
+
+    result.update(
+        value=value,
+        from_time=text_time(midnight),
+        hours=(latest["_time"] - midnight).total_seconds() / 3600,
+        estimated=True,
+        baseline_missing=True,
+        baseline_source="recovery_70_percent",
+        baseline_value=estimated_baseline,
+        reference_time=at_23["collected_at"],
+        recovery_time=recovery["collected_at"],
+        reason="午夜基线缺失；以23:00为参考，将首次恢复差值的70%向下取整计入估算基线",
+    )
     return result
 
 
@@ -389,10 +425,10 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     midnight = datetime.combine(current.date(), datetime.min.time(), tzinfo=TZ)
     today = boundary_metric(rows, effective, midnight, latest, day_tolerance)
     if today["value"] is None:
-        estimated_today = estimated_today_metric(rows, effective, midnight, latest)
+        estimated_today = estimated_day_metric(rows, effective, midnight, latest)
         if estimated_today["value"] is not None or estimated_today.get("baseline_missing"):
             today = estimated_today
-    if today["value"] is None and current >= midnight + timedelta(hours=2) and rows and rows[0]["_time"] >= midnight:
+    if today["value"] is None and current >= midnight + timedelta(hours=1) and rows and rows[0]["_time"] >= midnight:
         joined_today = joined_metric(rows, effective, latest)
         if joined_today["value"] is not None:
             today = joined_today
@@ -566,6 +602,10 @@ def sales_trend(
         )
         base = day_baseline(effective, start, day_tolerance, current)
         metric = interval(base, end, rows, bool(base and base["_time"] != start)) if base and end else missing("缺少日界附近的有效采样")
+        if not base and end:
+            estimated = estimated_day_metric(rows, effective, start, end)
+            if estimated["value"] is not None or estimated.get("baseline_missing"):
+                metric = estimated
         joined = bool(rows and effective and rows[0] is effective[0] and start <= rows[0]["_time"] < finish)
         if metric["value"] is None and joined and end:
             metric = interval(effective[0], end, rows)
@@ -573,7 +613,11 @@ def sales_trend(
                 metric.update(partial=True, reason="监控首日按加入后的首次采集计算")
         if metric["value"] is not None and day == current.date():
             metric["partial"] = True
-            metric["reason"] = "今日截至最近一次有效采集，尚未形成完整自然日"
+            metric["reason"] = (
+                metric["reason"] + "；今日截至最近一次有效采集，尚未形成完整自然日"
+                if metric.get("estimated")
+                else "今日截至最近一次有效采集，尚未形成完整自然日"
+            )
         daily.append({
             "date": day.isoformat(),
             "label": day.strftime("%m-%d"),
@@ -582,7 +626,7 @@ def sales_trend(
 
     cutoff = current - timedelta(hours=24)
     hourly = []
-    chart = chart_rows([snapshot for snapshot in source if not snapshot.get("is_midnight")])
+    chart = [point for point in chart_rows(source) if not point["midnight"]]
     for point in chart:
         point_time = timestamp(point["time"])
         if not point_time or point_time < cutoff or point_time > current:

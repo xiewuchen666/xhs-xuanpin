@@ -719,8 +719,8 @@ async function loadAndRenderDockTrend(product, forceRefresh = false) {
 
   if (noteEl) {
     noteEl.textContent = dockTrendMode === 'daily'
-      ? '日销量按每日午夜基线计算；缺失基线时从 02:00 起显示估算值。'
-      : '小时销量不展示午夜基线；真实缺采用灰色虚线，异常读数排除用橙色虚线。';
+      ? '日销量按每日午夜基线计算；缺失基线时从 01:00 起显示估算值。'
+      : '小时销量不展示午夜基线，但将其作为 01:00 的隐藏锚点；真实缺采用灰色虚线，异常读数排除用橙色虚线。';
   }
 
   if (!valid.length && !gapPoints.length && !statusPoints.length) {
@@ -1526,8 +1526,8 @@ function renderTrendChart() {
     tab.setAttribute('aria-selected', active ? 'true' : 'false');
   });
   trendNote.textContent = activeTrendMode === 'daily'
-    ? '日销量按每日午夜基线计算；缺失基线时从 02:00 起显示估算值。'
-    : '小时销量不展示午夜基线；真实缺采用灰色虚线，异常读数排除用橙色虚线。';
+    ? '日销量按每日午夜基线计算；缺失基线时从 01:00 起显示估算值。'
+    : '小时销量不展示午夜基线，但将其作为 01:00 的隐藏锚点；真实缺采用灰色虚线，异常读数排除用橙色虚线。';
   if (!valid.length && !gapPoints.length && !statusPoints.length) {
     trendSummary.textContent = '暂无可计算的趋势点';
     trendChart.innerHTML = '<div class="trend-empty">采集历史不足，或当前区间存在待确认数据。</div>';

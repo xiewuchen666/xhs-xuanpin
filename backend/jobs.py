@@ -484,7 +484,7 @@ def process_next(collect_fn=None) -> bool:
         deadline = created.replace(hour=23, minute=59, second=0, microsecond=0)
     while True:
         if deadline and current_time() >= deadline:
-            stop_error = "午夜基线已于23:59截止；缺失商品等待02:00兜底"
+            stop_error = "午夜基线已于23:59截止；缺失商品等待01:00后的恢复采样兜底"
             break
         with closing(db.connect()) as conn, conn:
             current = conn.execute("SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone()
@@ -618,7 +618,7 @@ def process_next(collect_fn=None) -> bool:
 
         if unprocessed:
             if deadline and current_time() >= deadline:
-                stop_error = "午夜基线已于23:59截止；缺失商品等待02:00兜底"
+                stop_error = "午夜基线已于23:59截止；缺失商品等待01:00后的恢复采样兜底"
                 break
             with closing(db.connect()) as conn, conn:
                 conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))

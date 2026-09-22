@@ -157,7 +157,7 @@ class PhaseThreeTests(unittest.TestCase):
             datetime(2026, 9, 20, 10, 0, tzinfo=metrics.TZ),
         )
 
-    def test_default_scheduler_skips_midnight_and_one_am(self):
+    def test_default_scheduler_skips_midnight_and_starts_at_one_am(self):
         app = server.create_app(testing=True)
         scheduler = BackgroundScheduler(timezone=metrics.TZ)
         app.extensions["collection_scheduler"] = scheduler
@@ -170,7 +170,7 @@ class PhaseThreeTests(unittest.TestCase):
         enqueue.assert_not_called()
         self.assertEqual(
             scheduler.get_job("auto_collect").trigger.get_next_fire_time(None, current),
-            datetime(2026, 9, 20, 2, 0, tzinfo=metrics.TZ),
+            datetime(2026, 9, 20, 1, 0, tzinfo=metrics.TZ),
         )
 
     def test_all_scope_is_deduped_union_and_excludes_paused(self):

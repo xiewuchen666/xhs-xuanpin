@@ -321,8 +321,8 @@ def configure_scheduler(app: Flask) -> None:
 
     def submit(baseline_slot: str | None = None, large_batch: bool | None = None) -> None:
         trigger = f"midnight-{baseline_slot}" if baseline_slot else "interval"
-        if baseline_slot is None and metrics.now().hour in {0, 1}:
-            app.logger.info("Scheduled collection skipped: trigger=%s reason=00:00-01:59 默认缺采窗口", trigger)
+        if baseline_slot is None and metrics.now().hour == 0:
+            app.logger.info("Scheduled collection skipped: trigger=%s reason=00:00-00:59 默认缺采窗口", trigger)
             return
         if baseline_slot is not None:
             product_count = len(db.get_monitored_products_raw("all"))
@@ -353,12 +353,12 @@ def configure_scheduler(app: Flask) -> None:
         current = metrics.now()
         last_run = metrics.timestamp(jobs.latest_successful_all_collection_at())
         if interval == timedelta(hours=1):
-            if current.hour not in {0, 1} and (not last_run or last_run + interval <= current):
+            if current.hour != 0 and (not last_run or last_run + interval <= current):
                 submit()
             scheduler.add_job(
                 submit,
                 "cron",
-                hour="2-23",
+                hour="1-23",
                 minute=0,
                 id="auto_collect",
                 timezone=metrics.TZ,
