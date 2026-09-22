@@ -192,6 +192,30 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertEqual(result["today"]["value"], 2)
         self.assertEqual(result["today"]["from_time"], "2026-09-18 23:55:00")
 
+    def test_missing_midnight_baseline_uses_0200_estimate(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-19 03:00:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-18 23:00:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-19 02:00:00", "total_sales": 110, "sales_raw": "已售110", "sales_precision": "exact", "price": 10},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-19 03:00:00", "total_sales": 115, "sales_raw": "已售115", "sales_precision": "exact", "price": 10},
+        ]
+
+        waiting = metrics.enrich(product, snapshots[:1], as_of="2026-09-19 01:00:00")
+        estimated = metrics.enrich(product, snapshots, as_of="2026-09-19 03:00:00")
+
+        self.assertIsNone(waiting["today"]["value"])
+        self.assertEqual(waiting["health_label"], "基线缺失")
+        self.assertEqual(estimated["today"]["value"], 8)
+        self.assertTrue(estimated["today"]["estimated"])
+        self.assertEqual(estimated["today"]["from_time"], "2026-09-19 02:00:00")
+        self.assertNotIn("estimated_label", estimated["today"])
+        self.assertEqual(estimated["health_label"], "基线缺失")
+
+        low_sales = [dict(row) for row in snapshots[:2]]
+        low_sales[1].update(total_sales=102, sales_raw="已售102")
+        low = metrics.enrich(product, low_sales, as_of="2026-09-19 02:00:00")
+        self.assertEqual(low["today"]["value"], 0)
+
     def test_lower_bound_sales_are_not_faked_into_growth(self):
         product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-18 10:00:00"}
         snapshots = [
@@ -230,7 +254,7 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertIsNone(result["today"]["value"])
         self.assertIsNone(result["increment"]["value"])
         self.assertEqual(result["counter_state"], "pending_drop")
-        self.assertEqual(result["health_label"], "销量回落待确认")
+        self.assertEqual(result["health_label"], "销量回落")
         self.assertIn("回落待确认", result["increment"]["reason"])
 
     def test_two_low_readings_reset_baseline_and_restart_increment(self):
@@ -244,7 +268,7 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertIsNone(reset["today"]["value"])
         self.assertIsNone(reset["increment"]["value"])
         self.assertEqual(reset["counter_state"], "reset_baseline")
-        self.assertEqual(reset["health_label"], "销量基线已重置")
+        self.assertEqual(reset["health_label"], "基线重置")
         self.assertIn("基线已重置", reset["increment"]["reason"])
 
         snapshots.append(

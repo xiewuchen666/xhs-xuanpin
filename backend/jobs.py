@@ -20,7 +20,10 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATUSES = {"success", "partial", "failed", "blocked", "cancelled", "interrupted"}
 BASELINE_SLOTS = {"2355"}
 RETRY_DELAY_SECONDS = 30
-RETRY_PREFIX = "首次失败，等待重试："
+
+
+def current_time() -> datetime:
+    return datetime.now()
 
 
 def safe_error(exc: Exception) -> str:
@@ -313,12 +316,14 @@ def _job_cancelled(job_id: int) -> bool:
         return not row or bool(row["cancel_requested"])
 
 
-def _collect_batch(items: list[dict[str, Any]], collect_fn, should_continue) -> dict[int, dict[str, Any] | Exception]:
+def _collect_batch(items: list[dict[str, Any]], collect_fn, should_continue, deadline=None) -> dict[int, dict[str, Any] | Exception]:
     if collect_fn is None:
+        kwargs = {"max_pages": 4, "should_continue": should_continue}
+        if deadline is not None:
+            kwargs["deadline"] = deadline
         return collector_module.collect_products(
             [(int(item["id"]), str(item["url"])) for item in items],
-            max_pages=4,
-            should_continue=should_continue,
+            **kwargs,
         )
     results: dict[int, dict[str, Any] | Exception] = {}
     for item in items:
@@ -327,9 +332,13 @@ def _collect_batch(items: list[dict[str, Any]], collect_fn, should_continue) -> 
         try:
             results[int(item["id"])] = collect_fn(str(item["url"]))
         except Exception as exc:
-            results[int(item["id"])] = exc
             if requires_verification(safe_error(exc)):
-                break
+                raise collector_module.BatchCollectionError(
+                    "需要人工验证",
+                    safe_error(exc),
+                    requires_manual=True,
+                ) from exc
+            results[int(item["id"])] = exc
     return results
 
 
@@ -392,19 +401,19 @@ def _persist_item(job: dict[str, Any], item: dict[str, Any], data: dict[str, Any
     )
 
 
-def _finish_job(job_id: int, blocked: bool = False) -> None:
+def _finish_job(job_id: int, blocked: bool = False, stop_error: str | None = None) -> None:
     with closing(db.connect()) as conn, conn:
         current = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not current:
             return
-        if blocked or current["cancel_requested"]:
+        if stop_error or current["cancel_requested"]:
             conn.execute(
                 """
                 UPDATE job_items SET status='cancelled',message=?,finished_at=?
                 WHERE job_id=? AND status IN ('queued','running')
                 """,
                 (
-                    "需先人工处理验证/登录，再手动重试" if blocked else "用户取消",
+                    stop_error if stop_error else "用户取消",
                     db.now_text(),
                     job_id,
                 ),
@@ -416,8 +425,8 @@ def _finish_job(job_id: int, blocked: bool = False) -> None:
                 (job_id,),
             )
         }
-        if blocked:
-            status, error = "blocked", "需要人工处理验证或登录；本任务已停止"
+        if stop_error:
+            status, error = ("blocked" if blocked else ("partial" if counts.get("success") else "failed")), stop_error
         elif current["cancel_requested"]:
             status, error = "cancelled", None
         elif counts.get("failed") and counts.get("success"):
@@ -468,20 +477,52 @@ def process_next(collect_fn=None) -> bool:
         bool(job["is_midnight"]),
     )
     blocked = False
+    stop_error = None
+    deadline = None
+    if bool(job["is_midnight"]):
+        created = datetime.fromisoformat(str(job["created_at"]))
+        deadline = created.replace(hour=23, minute=59, second=0, microsecond=0)
     while True:
+        if deadline and current_time() >= deadline:
+            stop_error = "午夜基线已于23:59截止；缺失商品等待02:00兜底"
+            break
         with closing(db.connect()) as conn, conn:
             current = conn.execute("SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone()
             if not current or current["cancel_requested"]:
                 break
-            queued = [
+            all_queued = [
                 dict(row)
                 for row in conn.execute(
                     "SELECT * FROM job_items WHERE job_id=? AND status='queued' ORDER BY id",
                     (job["id"],),
                 )
             ]
-            if not queued:
+            if not all_queued:
                 break
+        now_text = current_time().strftime("%Y-%m-%d %H:%M:%S")
+        queued = [item for item in all_queued if not item.get("retry_after") or str(item["retry_after"]) <= now_text]
+        if not queued:
+            wait_until = min(datetime.fromisoformat(str(item["retry_after"])) for item in all_queued)
+            remaining = max(0.0, (wait_until - current_time()).total_seconds())
+            wait_seconds = float(int(remaining + 0.999))
+            if deadline:
+                wait_seconds = min(wait_seconds, max(0.0, (deadline - current_time()).total_seconds()))
+            if collect_fn is not None:
+                time.sleep(wait_seconds)
+            else:
+                wait_end = time.monotonic() + wait_seconds
+                while time.monotonic() < wait_end:
+                    if _job_cancelled(int(job["id"])) or (not bool(job["is_midnight"]) and _midnight_waiting()):
+                        with closing(db.connect()) as conn, conn:
+                            conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))
+                        return True
+                    time.sleep(min(0.5, wait_end - time.monotonic()))
+            with closing(db.connect()) as conn, conn:
+                conn.execute(
+                    "UPDATE job_items SET retry_after=NULL WHERE job_id=? AND status='queued' AND retry_after IS NOT NULL",
+                    (job["id"],),
+                )
+            continue
         if not bool(job["is_midnight"]) and _midnight_waiting():
             with closing(db.connect()) as conn, conn:
                 conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))
@@ -507,33 +548,35 @@ def process_next(collect_fn=None) -> bool:
                 if not queued:
                     continue
 
-        retrying = {
-            int(item["id"])
-            for item in queued
-            if str(item.get("message") or "").startswith(RETRY_PREFIX)
-        }
         with closing(db.connect()) as conn, conn:
             conn.executemany(
-                "UPDATE job_items SET status='running',started_at=?,finished_at=NULL WHERE id=?",
+                "UPDATE job_items SET status='running',attempt_count=attempt_count+1,started_at=?,finished_at=NULL WHERE id=?",
                 [(db.now_text(), item["id"]) for item in queued],
             )
 
         def should_continue() -> bool:
-            return not _job_cancelled(int(job["id"])) and (
+            return (not deadline or current_time() < deadline) and not _job_cancelled(int(job["id"])) and (
                 bool(job["is_midnight"]) or not _midnight_waiting()
             )
 
         try:
-            results = _collect_batch(queued, collect_fn, should_continue)
+            results = _collect_batch(queued, collect_fn, should_continue, deadline)
+        except collector_module.BatchCollectionError as exc:
+            blocked = exc.requires_manual
+            stop_error = safe_error(exc)
+            logger.error("Job stopped: job=%s reason=%s", job["id"], stop_error)
+            break
         except Exception as exc:
-            results = {int(item["id"]): exc for item in queued}
+            stop_error = "采集服务异常，任务已停止：" + safe_error(exc)
+            logger.exception("Job collector service failed: job=%s", job["id"])
+            break
 
         processed = set(results)
         unprocessed = [item for item in queued if int(item["id"]) not in processed]
         if unprocessed:
             with closing(db.connect()) as conn, conn:
                 conn.executemany(
-                    "UPDATE job_items SET status='queued',started_at=NULL,finished_at=NULL WHERE id=?",
+                    "UPDATE job_items SET status='queued',attempt_count=MAX(0,attempt_count-1),started_at=NULL,finished_at=NULL WHERE id=?",
                     [(item["id"],) for item in unprocessed],
                 )
 
@@ -545,62 +588,49 @@ def process_next(collect_fn=None) -> bool:
             result = results[item_id]
             if not isinstance(result, Exception):
                 _persist_item(job, item, result)
-                if item_id in retrying:
+                if int(item.get("attempt_count") or 0) > 0:
                     logger.info("Job item retry succeeded: job=%s item=%s", job["id"], item_id)
                 continue
 
             message = safe_error(result)
             logger.warning("Job %s item %s failed: %s", job["id"], item_id, message)
-            verification = requires_verification(message)
-            final_failure = verification or item_id in retrying
+            terminal_status = result.status if isinstance(result, collector_module.ProductTerminalError) else None
+            attempt = int(item.get("attempt_count") or 0) + 1
+            final_failure = bool(terminal_status) or attempt >= 3
             if final_failure and item.get("product_id"):
-                db.mark_product_error(int(item["product_id"]), message)
+                db.mark_product_error(int(item["product_id"]), message, terminal_status or "abnormal")
+            retry_after = None
+            if not final_failure and attempt == 2:
+                retry_after = (current_time() + timedelta(seconds=RETRY_DELAY_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
             with closing(db.connect()) as conn, conn:
                 conn.execute(
-                    "UPDATE job_items SET status=?,message=?,finished_at=? WHERE id=?",
+                    "UPDATE job_items SET status=?,message=?,retry_after=?,finished_at=? WHERE id=?",
                     (
                         "failed" if final_failure else "queued",
-                        message if final_failure else RETRY_PREFIX + message,
+                        message,
+                        retry_after,
                         db.now_text(),
                         item_id,
                     ),
                 )
-            if verification:
-                blocked = True
-                logger.error(
-                    "Job blocked by verification requirement: job=%s item=%s reason=%s",
-                    job["id"],
-                    item_id,
-                    message,
-                )
-            elif not final_failure:
+            if not final_failure:
                 first_failures += 1
 
-        if blocked:
-            break
         if unprocessed:
+            if deadline and current_time() >= deadline:
+                stop_error = "午夜基线已于23:59截止；缺失商品等待02:00兜底"
+                break
             with closing(db.connect()) as conn, conn:
                 conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))
             return True
         if first_failures:
             logger.warning(
-                "Job batch has %s first-attempt failures; retrying in %ss: job=%s",
+                "Job batch has %s retryable failures: job=%s",
                 first_failures,
-                RETRY_DELAY_SECONDS,
                 job["id"],
             )
-            if collect_fn is not None:
-                time.sleep(RETRY_DELAY_SECONDS)
-            else:
-                deadline = time.monotonic() + RETRY_DELAY_SECONDS
-                while time.monotonic() < deadline:
-                    if _job_cancelled(int(job["id"])) or (not bool(job["is_midnight"]) and _midnight_waiting()):
-                        with closing(db.connect()) as conn, conn:
-                            conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))
-                        return True
-                    time.sleep(min(0.5, deadline - time.monotonic()))
 
-    _finish_job(int(job["id"]), blocked)
+    _finish_job(int(job["id"]), blocked, stop_error)
     return True
 
 

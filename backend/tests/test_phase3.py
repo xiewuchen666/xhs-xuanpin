@@ -83,9 +83,34 @@ class PhaseThreeTests(unittest.TestCase):
             {scheduled.id for scheduled in scheduler.get_jobs()},
             {
                 "auto_collect",
+                "midnight_collect_2350",
                 "midnight_collect_2355",
             },
         )
+
+    def test_midnight_start_time_changes_at_200_products(self):
+        app = server.create_app(testing=True)
+        scheduler = BackgroundScheduler(timezone=metrics.TZ)
+        app.extensions["collection_scheduler"] = scheduler
+        server.configure_scheduler(app)
+
+        with (
+            mock.patch("server.db.get_monitored_products_raw", return_value=[{}] * 200),
+            mock.patch("server.jobs.enqueue", return_value=11) as enqueue,
+        ):
+            early = scheduler.get_job("midnight_collect_2350")
+            late = scheduler.get_job("midnight_collect_2355")
+            early.func(*early.args)
+            late.func(*late.args)
+        enqueue.assert_called_once_with("all", baseline_slot="2355")
+
+        with (
+            mock.patch("server.db.get_monitored_products_raw", return_value=[{}] * 201),
+            mock.patch("server.jobs.enqueue", return_value=12) as enqueue,
+        ):
+            early.func(*early.args)
+            late.func(*late.args)
+        enqueue.assert_called_once_with("all", baseline_slot="2355")
 
     def test_default_scheduler_uses_top_of_hour_and_catches_up_when_overdue(self):
         with closing(db.connect()) as conn, conn:
@@ -238,11 +263,11 @@ class PhaseThreeTests(unittest.TestCase):
         self.assertEqual(failed["last_attempt_status"], "failed")
         self.assertNotEqual(failed["last_attempt_at"], failed["last_collected_at"])
         failed_view = next(product for product in db.list_products() if product["id"] == first)
-        self.assertEqual(failed_view["health_label"], "采集失败")
-        self.assertEqual(attempts, {"first": 2, "second": 1})
+        self.assertEqual(failed_view["health_label"], "采集异常")
+        self.assertEqual(attempts, {"first": 3, "second": 1})
         sleep.assert_called_once_with(30)
 
-    def test_transient_product_failure_retries_after_30_seconds(self):
+    def test_first_product_failure_retries_immediately(self):
         product_id = self.add_single("retry")
         job_id = jobs.enqueue("all")
         attempts = 0
@@ -260,7 +285,41 @@ class PhaseThreeTests(unittest.TestCase):
         self.assertEqual(jobs.get_job(job_id)["status"], "success")
         self.assertEqual(db.snapshot_count(product_id), 2)
         self.assertEqual(attempts, 2)
+        sleep.assert_not_called()
+
+    def test_second_product_failure_waits_before_third_attempt(self):
+        product_id = self.add_single("retry-three")
+        job_id = jobs.enqueue("all")
+        attempts = 0
+
+        def flaky(_url: str):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise RuntimeError("temporary collection failure")
+            return payload("retry-three", "2026-09-18 11:00:00", 130)
+
+        with mock.patch("jobs.time.sleep") as sleep:
+            self.assertTrue(jobs.process_next(flaky))
+
+        self.assertEqual(jobs.get_job(job_id)["status"], "success")
+        self.assertEqual(db.snapshot_count(product_id), 2)
+        self.assertEqual(attempts, 3)
         sleep.assert_called_once_with(30)
+
+    def test_terminal_product_error_is_not_collected_again(self):
+        product_id = self.add_single("gone")
+        job_id = jobs.enqueue("all")
+
+        self.assertTrue(jobs.process_next(
+            lambda _url: (_ for _ in ()).throw(jobs.collector_module.ProductTerminalError("delisted", "商品已下架"))
+        ))
+
+        self.assertEqual(jobs.get_job(job_id)["items"][0]["attempt_count"], 1)
+        product = db.get_product(product_id)
+        self.assertEqual(product["collection_status"], "delisted")
+        with self.assertRaisesRegex(ValueError, "没有可处理"):
+            jobs.enqueue("all", product_ids=[product_id])
 
     def test_product_failure_log_redacts_url(self):
         self.add_single("redacted-log")
@@ -293,8 +352,9 @@ class PhaseThreeTests(unittest.TestCase):
         self.assertEqual(job["status"], "blocked")
         self.assertEqual(
             [item["status"] for item in job["items"]],
-            ["failed", "cancelled"],
+            ["cancelled", "cancelled"],
         )
+        self.assertIn("人工安全验证", job["error"])
         sleep.assert_not_called()
 
     def test_midnight_sample_is_marked_and_retry_is_ordinary(self):
@@ -305,11 +365,12 @@ class PhaseThreeTests(unittest.TestCase):
                 "UPDATE jobs SET created_at='2026-09-18 23:55:00' WHERE id=?",
                 (job_id,),
             )
-        self.assertTrue(
-            jobs.process_next(
-                lambda _url: payload("midnight", "2026-09-18 23:55:01", 120)
+        with mock.patch("jobs.current_time", return_value=datetime(2026, 9, 18, 23, 55, 1)):
+            self.assertTrue(
+                jobs.process_next(
+                    lambda _url: payload("midnight", "2026-09-18 23:55:01", 120)
+                )
             )
-        )
         with closing(db.connect()) as conn:
             latest = conn.execute(
                 """
@@ -330,6 +391,20 @@ class PhaseThreeTests(unittest.TestCase):
         self.assertEqual(jobs.get_job(interrupted_job)["status"], "interrupted")
         retry_job = jobs.retry(interrupted_job)
         self.assertEqual(jobs.get_job(retry_job)["is_midnight"], 0)
+
+    def test_midnight_job_stops_at_2359_without_marking_product_abnormal(self):
+        product_id = self.add_single("deadline")
+        job_id = jobs.enqueue("all", baseline_slot="2355")
+        with closing(db.connect()) as conn, conn:
+            conn.execute("UPDATE jobs SET created_at='2026-09-18 23:55:00' WHERE id=?", (job_id,))
+
+        with mock.patch("jobs.current_time", return_value=datetime(2026, 9, 18, 23, 59, 0)):
+            self.assertTrue(jobs.process_next(lambda _url: payload("deadline", "2026-09-18 23:59:00")))
+
+        job = jobs.get_job(job_id)
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("23:59", job["error"])
+        self.assertEqual(db.get_product(product_id)["collection_status"], "active")
 
     def test_selection_only_product_supports_manual_collect_pause_and_resume(self):
         product_id = self.add_selection_only("selection-api")

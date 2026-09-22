@@ -312,17 +312,27 @@ def configure_scheduler(app: Flask) -> None:
         return
     cfg = db.get_settings()
     midnight_jobs = {
-        "midnight_collect_2355": (23, 55, "2355"),
+        "midnight_collect_2350": (23, 50, "2355", True),
+        "midnight_collect_2355": (23, 55, "2355", False),
     }
     for name in ("auto_collect", "midnight_collect", *midnight_jobs):
         if scheduler.get_job(name):
             scheduler.remove_job(name)
 
-    def submit(baseline_slot: str | None = None) -> None:
+    def submit(baseline_slot: str | None = None, large_batch: bool | None = None) -> None:
         trigger = f"midnight-{baseline_slot}" if baseline_slot else "interval"
         if baseline_slot is None and metrics.now().hour in {0, 1}:
             app.logger.info("Scheduled collection skipped: trigger=%s reason=00:00-01:59 默认缺采窗口", trigger)
             return
+        if baseline_slot is not None:
+            product_count = len(db.get_monitored_products_raw("all"))
+            if (large_batch and product_count <= 200) or (large_batch is False and product_count > 200):
+                app.logger.info(
+                    "Scheduled collection skipped: trigger=%s products=%s threshold=200",
+                    trigger,
+                    product_count,
+                )
+                return
         app.logger.info("Scheduled collection trigger fired: %s", trigger)
         try:
             job_id = jobs.enqueue("all", baseline_slot=baseline_slot)
@@ -372,11 +382,11 @@ def configure_scheduler(app: Flask) -> None:
                 misfire_grace_time=60,
             )
     if cfg.get("midnight_enabled") == "1":
-        for job_id, (hour, minute, slot) in midnight_jobs.items():
+        for job_id, (hour, minute, slot, large_batch) in midnight_jobs.items():
             scheduler.add_job(
                 submit,
                 "cron",
-                args=[slot],
+                args=[slot, large_batch],
                 hour=hour,
                 minute=minute,
                 id=job_id,

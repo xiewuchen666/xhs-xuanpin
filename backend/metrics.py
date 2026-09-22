@@ -50,7 +50,7 @@ def exact_counter(row: Optional[Dict[str, Any]]) -> bool:
 
 
 def midnight_actions(rows: List[Dict[str, Any]]) -> Dict[int, str]:
-    """Use each 23:55 sample as the next day's baseline."""
+    """Use each tagged midnight sample as the next day's baseline."""
     actions = {
         id(row): "ignore"
         for row in rows
@@ -251,6 +251,45 @@ def boundary_metric(
     return interval(base, end, rows, base["_time"] != target)
 
 
+def estimated_today_metric(
+    rows: List[Dict[str, Any]],
+    effective: List[Dict[str, Any]],
+    midnight: datetime,
+    latest: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not latest or latest["_time"] < midnight + timedelta(hours=2):
+        result = missing("午夜基线缺失，等待02:00兜底采样")
+        result["baseline_missing"] = True
+        return result
+    if any(
+        exact_counter(row)
+        and row.get("baseline_slot") == "2355"
+        and row.get("baseline_day") == midnight.date().isoformat()
+        for row in rows
+    ):
+        return missing("午夜基线存在但当前区间不可计算", "anomaly")
+
+    at_23 = nearest(effective, midnight - timedelta(hours=1), 30, midnight)
+    at_02 = nearest(effective, midnight + timedelta(hours=2), 30, latest["_time"])
+    measured = interval(at_23, at_02, rows) if at_23 and at_02 else missing("缺少23:00或02:00有效采样")
+    if measured["value"] is None:
+        result = missing("午夜基线缺失，且23:00-02:00兜底端点不可用")
+        result["baseline_missing"] = True
+        return result
+
+    delta = int(measured["value"])
+    estimated_increment = 0 if delta < 3 else delta // 3
+    result = interval(at_02, latest, rows, approximate=True)
+    if result["value"] is not None:
+        result.update(
+            value=estimated_increment + int(result["value"]),
+            estimated=True,
+            baseline_missing=True,
+            reason="午夜基线缺失；以02:00为基线，并补入23:00-02:00新增的三分之一，余数舍弃，少于3单按0单",
+        )
+    return result
+
+
 def window_metric(
     rows: List[Dict[str, Any]],
     effective: List[Dict[str, Any]],
@@ -349,7 +388,11 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     p["age_minutes"] = round(age) if age is not None else None
     midnight = datetime.combine(current.date(), datetime.min.time(), tzinfo=TZ)
     today = boundary_metric(rows, effective, midnight, latest, day_tolerance)
-    if today["value"] is None and rows and rows[0]["_time"] >= midnight:
+    if today["value"] is None:
+        estimated_today = estimated_today_metric(rows, effective, midnight, latest)
+        if estimated_today["value"] is not None or estimated_today.get("baseline_missing"):
+            today = estimated_today
+    if today["value"] is None and current >= midnight + timedelta(hours=2) and rows and rows[0]["_time"] >= midnight:
         joined_today = joined_metric(rows, effective, latest)
         if joined_today["value"] is not None:
             today = joined_today
@@ -418,23 +461,32 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     p["velocity_reason"] = "实际采样区间的平均新增/小时，不是实时速度或预测" if p["velocity"] is not None else "区间不足 5 分钟或缺少有效读数"
     p["counter_state"] = latest_counter_state or "unknown"
     p["anomaly"] = any(m["quality"] == "anomaly" for m in (today, yesterday, increment, rolling, prior))
-    failed = p.get("last_attempt_status") == "failed" or (p.get("last_status") not in (None, "", "正常") and not p.get("last_attempt_status"))
+    collection_status = p.get("collection_status") or "active"
+    failed = collection_status == "abnormal" or p.get("last_attempt_status") == "failed" or (p.get("last_status") not in (None, "", "正常") and not p.get("last_attempt_status"))
     if p.get("monitor_state") == "archived":
         p["health"], p["health_label"] = "muted", "已归档"
     elif p.get("monitor_state") == "paused":
         p["health"], p["health_label"] = "muted", "已暂停"
+    elif collection_status == "delisted":
+        p["health"], p["health_label"] = "danger", "已下架"
+    elif collection_status == "invalid_link":
+        p["health"], p["health_label"] = "danger", "链接失效"
+    elif collection_status == "abnormal":
+        p["health"], p["health_label"] = "danger", "采集异常"
     elif failed:
         p["health"], p["health_label"] = "danger", "采集失败"
     elif latest_counter_state == "pending_drop":
-        p["health"], p["health_label"] = "warning", "销量回落待确认"
+        p["health"], p["health_label"] = "warning", "销量回落"
     elif latest_counter_state == "reset_baseline":
-        p["health"], p["health_label"] = "warning", "销量基线已重置"
+        p["health"], p["health_label"] = "warning", "基线重置"
+    elif today.get("baseline_missing") and p["sales_precision"] == "exact":
+        p["health"], p["health_label"] = "warning", "基线缺失"
     elif p["anomaly"]:
-        p["health"], p["health_label"] = "danger", "计数区间异常"
+        p["health"], p["health_label"] = "danger", "计数异常"
     elif p["sales_not_updated"]:
-        p["health"], p["health_label"] = "warning", "本次销量缺失"
+        p["health"], p["health_label"] = "warning", "销量缺失"
     elif p["stale"]:
-        p["health"], p["health_label"] = "warning", "数据已过期"
+        p["health"], p["health_label"] = "warning", "数据过期"
     elif p["sales_precision"] != "exact":
         p["health"], p["health_label"] = "warning", p["precision_label"]
     else:

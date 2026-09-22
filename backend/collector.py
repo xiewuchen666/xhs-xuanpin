@@ -16,6 +16,19 @@ DETAIL_API = "/api/store/jpd/edith/detail/h5/toc"
 logger = logging.getLogger(__name__)
 
 
+class ProductTerminalError(RuntimeError):
+    def __init__(self, status: str, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+class BatchCollectionError(RuntimeError):
+    def __init__(self, reason: str, message: str, *, requires_manual: bool = False):
+        super().__init__(message)
+        self.reason = reason
+        self.requires_manual = requires_manual
+
+
 def parse_sales(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     result = {"total_sales": None, "sales_raw": raw, "sales_precision": "unknown"}
@@ -239,7 +252,15 @@ async def _collect_page(context, key: int, url: str, timeout_ms: int) -> tuple[i
             except Exception:
                 text = ""
             if any(word in text for word in ("验证码", "安全验证", "异常访问", "请完成验证")):
-                raise RuntimeError("小红书要求人工安全验证，后台采集已停止，未尝试绕过验证")
+                raise BatchCollectionError(
+                    "需要人工验证",
+                    "小红书要求人工安全验证，后台采集已停止，未尝试绕过验证",
+                    requires_manual=True,
+                )
+            if any(word in text for word in ("商品已下架", "该商品已下架")):
+                raise ProductTerminalError("delisted", "商品已下架，已停止后续自动采集")
+            if any(word in text for word in ("商品不存在", "页面不存在", "链接已失效")):
+                raise ProductTerminalError("invalid_link", "商品链接失效，已停止后续自动采集")
             logger.warning(
                 "Product detail capture failed: detail_seen=%s status=%s parse_reason=%s",
                 detail_seen,
@@ -247,6 +268,8 @@ async def _collect_page(context, key: int, url: str, timeout_ms: int) -> tuple[i
                 parse_reason or ("未收到目标详情接口响应" if not detail_seen else "无"),
             )
             if last_status and last_status != 200:
+                if last_status in {404, 410}:
+                    raise ProductTerminalError("invalid_link", f"商品详情接口返回 HTTP {last_status}，链接已失效")
                 raise RuntimeError(f"商品详情接口返回 HTTP {last_status}")
             raise RuntimeError("未捕获到商品详情数据，可能是链接失效、网络波动或页面接口发生变化")
         captured.update(await _collect_shop_details(page, str(captured.get("shop_id") or "")))
@@ -262,51 +285,70 @@ async def _collect_products_async(
     timeout_ms: int,
     max_pages: int,
     should_continue,
+    deadline: datetime | None,
 ) -> dict[int, dict[str, Any] | Exception]:
     from playwright.async_api import async_playwright
 
     results: dict[int, dict[str, Any] | Exception] = {}
-    async with async_playwright() as playwright:
-        context = await playwright.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE_DIR),
-            channel="chrome",
-            headless=True,
-            locale="zh-CN",
-            viewport={"width": 1365, "height": 900},
-        )
-        try:
-            async def route_request(route):
-                request = route.request
-                if request.is_navigation_request():
-                    try:
-                        validate_url(request.url)
-                    except ValueError:
+    try:
+        async with async_playwright() as playwright:
+            context = await playwright.chromium.launch_persistent_context(
+                user_data_dir=str(PROFILE_DIR),
+                channel="chrome",
+                headless=True,
+                locale="zh-CN",
+                viewport={"width": 1365, "height": 900},
+            )
+            try:
+                async def route_request(route):
+                    request = route.request
+                    if request.is_navigation_request():
+                        try:
+                            validate_url(request.url)
+                        except ValueError:
+                            await route.abort()
+                            return
+                    if request.resource_type in {"image", "media", "font"}:
                         await route.abort()
                         return
-                if request.resource_type in {"image", "media", "font"}:
-                    await route.abort()
-                    return
-                await route.continue_()
+                    await route.continue_()
 
-            await context.route("**/*", route_request)
-            for page in list(context.pages):
-                await page.close()
-            for offset in range(0, len(requests), max_pages):
-                if should_continue is not None and not should_continue():
-                    break
-                wave = requests[offset:offset + max_pages]
-                completed = await asyncio.gather(
-                    *(_collect_page(context, key, url, timeout_ms) for key, url in wave)
-                )
-                results.update(completed)
-                if any(
-                    isinstance(value, Exception)
-                    and any(term in str(value) for term in ("人工安全验证", "验证码", "安全验证", "异常访问", "请完成验证"))
-                    for value in results.values()
-                ):
-                    break
-        finally:
-            await context.close()
+                await context.route("**/*", route_request)
+                for page in list(context.pages):
+                    await page.close()
+                for offset in range(0, len(requests), max_pages):
+                    if should_continue is not None and not should_continue():
+                        break
+                    remaining = (deadline - datetime.now()).total_seconds() if deadline else None
+                    if remaining is not None and remaining <= 0:
+                        break
+                    wave = requests[offset:offset + max_pages]
+                    pending = asyncio.gather(
+                        *(_collect_page(context, key, url, timeout_ms) for key, url in wave)
+                    )
+                    try:
+                        completed = await asyncio.wait_for(pending, timeout=remaining) if remaining is not None else await pending
+                    except TimeoutError:
+                        break
+                    results.update(completed)
+                    batch_error = next(
+                        (value for _, value in completed if isinstance(value, BatchCollectionError)),
+                        None,
+                    )
+                    if batch_error:
+                        raise batch_error
+                    errors = [value for _, value in completed if isinstance(value, Exception)]
+                    if len(errors) == len(completed) and len(errors) > 1 and all(
+                        any(term in str(error) for term in ("ERR_INTERNET_DISCONNECTED", "ERR_NAME_NOT_RESOLVED", "ERR_CONNECTION"))
+                        for error in errors
+                    ):
+                        raise BatchCollectionError("网络连接异常", "整批商品均因网络连接异常采集失败，任务已停止")
+            finally:
+                await context.close()
+    except BatchCollectionError:
+        raise
+    except Exception as exc:
+        raise BatchCollectionError("浏览器运行异常", f"Chrome 采集进程异常：{type(exc).__name__}") from exc
     return results
 
 
@@ -315,6 +357,7 @@ def collect_products(
     timeout_ms: int = 30000,
     max_pages: int = 4,
     should_continue=None,
+    deadline: datetime | None = None,
 ) -> dict[int, dict[str, Any] | Exception]:
     if not requests:
         return {}
@@ -326,7 +369,7 @@ def collect_products(
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     with COLLECT_LOCK:
         return asyncio.run(
-            _collect_products_async(validated, timeout_ms, max(1, max_pages), should_continue)
+            _collect_products_async(validated, timeout_ms, max(1, max_pages), should_continue, deadline)
         )
 
 

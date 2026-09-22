@@ -103,6 +103,7 @@ def init_db() -> None:
         product_columns = _columns(conn, "products")
         product_additions = {
             "monitor_state": "TEXT NOT NULL DEFAULT 'active'",
+            "collection_status": "TEXT NOT NULL DEFAULT 'active'",
             "last_attempt_at": "TEXT",
             "last_attempt_status": "TEXT",
             "last_attempt_error": "TEXT",
@@ -155,6 +156,14 @@ def init_db() -> None:
         job_columns = _columns(conn, "jobs")
         if "baseline_slot" not in job_columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN baseline_slot TEXT")
+        item_columns = _columns(conn, "job_items")
+        item_additions = {
+            "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+            "retry_after": "TEXT",
+        }
+        for name, declaration in item_additions.items():
+            if name not in item_columns:
+                conn.execute(f"ALTER TABLE job_items ADD COLUMN {name} {declaration}")
         defaults = {
             "auto_enabled": "1",
             "auto_interval_minutes": "60",
@@ -213,23 +222,26 @@ def get_monitored_products_raw(scope: str = "all") -> list[dict[str, Any]]:
         return [
             dict(row)
             for row in conn.execute(
-                "SELECT p.* FROM products p WHERE p.monitor_state='active' AND "
+                "SELECT p.* FROM products p WHERE p.monitor_state='active' "
+                "AND COALESCE(p.collection_status,'active') NOT IN ('delisted','invalid_link') AND "
                 + conditions[scope]
                 + " ORDER BY p.id"
             )
         ]
 
 
-def mark_product_error(product_id: int, message: str) -> None:
+def mark_product_error(product_id: int, message: str, status: str = "abnormal") -> None:
+    if status not in {"abnormal", "delisted", "invalid_link"}:
+        raise ValueError("无效采集状态")
     safe = str(message or "采集失败")[:800]
     with closing(connect()) as conn, conn:
         conn.execute(
             """
             UPDATE products
-            SET last_attempt_at=?,last_attempt_status='failed',last_attempt_error=?
+            SET collection_status=?,last_attempt_at=?,last_attempt_status='failed',last_attempt_error=?
             WHERE id=?
             """,
-            (now_text(), safe, product_id),
+            (status, now_text(), safe, product_id),
         )
 
 
@@ -397,7 +409,7 @@ def persist(
             raise ValueError("商品标识发生变化；为保护历史，本次采集未写入")
 
         conn.execute(
-            "UPDATE products SET last_attempt_at=?,last_attempt_status='success',last_attempt_error='' WHERE id=?",
+            "UPDATE products SET collection_status='active',last_attempt_at=?,last_attempt_status='success',last_attempt_error='' WHERE id=?",
             (now_text(), product_id),
         )
         conn.execute("""
