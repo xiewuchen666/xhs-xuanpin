@@ -257,16 +257,19 @@ def estimated_day_metric(
     midnight: datetime,
     latest: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    if not latest or latest["_time"] < midnight + timedelta(hours=1):
-        result = missing("午夜基线缺失，等待01:00后的恢复采样")
-        result["baseline_missing"] = True
-        return result
-    if any(
+    has_midnight_baseline = any(
         exact_counter(row)
         and row.get("baseline_slot") == "2355"
         and row.get("baseline_day") == midnight.date().isoformat()
         for row in rows
-    ):
+    )
+    if has_midnight_baseline and latest and latest["_time"] < midnight:
+        return missing("今日尚无有效采样")
+    if not latest or latest["_time"] < midnight + timedelta(hours=1):
+        result = missing("午夜基线缺失，等待01:00后的恢复采样")
+        result["baseline_missing"] = True
+        return result
+    if has_midnight_baseline:
         return missing("午夜基线存在但当前区间不可计算", "anomaly")
 
     at_23 = nearest(

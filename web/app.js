@@ -35,6 +35,8 @@ const shopImportTitle = document.querySelector('#shopImportTitle');
 const shopImportHint = document.querySelector('#shopImportHint');
 
 const exportOverlay = document.querySelector('#exportOverlay');
+const exportTitle = document.querySelector('#exportTitle');
+const exportDescription = document.querySelector('#exportDescription');
 const exportClose = document.querySelector('#exportClose');
 const exportCancel = document.querySelector('#exportCancel');
 const exportCsv = document.querySelector('#exportCsv');
@@ -52,6 +54,8 @@ const settingsRuntime = document.querySelector('#settingsRuntime');
 const dockCard = document.querySelector('#dockCard');
 
 let selectedProductId = null;
+const selectedProductIds = new Set();
+let exportScope = 'all';
 let dockTrendMode = 'daily';
 let dockTrendRange = 7;
 let cachedTrends = {};
@@ -260,13 +264,14 @@ function pageHeader(title, countText, subtitle, cards) {
       if (sf) {
         const targetVal = card.getAttribute('data-status-filter') || '';
         sf.value = (sf.value === targetVal && targetVal !== '') ? '' : targetVal;
+        selectedProductIds.clear();
         productPage = 1;
         renderCurrentProductList();
       }
     });
   });
 
-  document.querySelector('#pageExportBtn')?.addEventListener('click', openExportDialog);
+  document.querySelector('#pageExportBtn')?.addEventListener('click', () => openExportDialog('all'));
   document.querySelector('#pageCollectBtn')?.addEventListener('click', event => {
     if (view === 'shops') collectVisibleShopProducts(event);
     else collectVisibleProducts(event);
@@ -328,10 +333,17 @@ function productToolbar(products) {
       '<option value="100"' + (productPageSize === 100 ? ' selected' : '') + '>每页: 100</option>' +
     '</select>' +
     '<div class="grow"></div>' +
-    '<button class="btn-tool" id="batchExportBtn" type="button">' +
-      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
-      '批量导出' +
-    '</button>' +
+    '<div class="toolbar-menu">' +
+      '<button class="btn-tool" id="exportMenuBtn" type="button" aria-haspopup="menu" aria-expanded="false">' +
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
+        '导出⌄' +
+      '</button>' +
+      '<div class="toolbar-menu-list" id="exportMenu" role="menu" hidden>' +
+        '<button id="exportAllBtn" type="button" role="menuitem">全部导出</button>' +
+        '<button id="exportSelectedBtn" type="button" role="menuitem">导出选中（<span id="selectedExportCount">0</span>）</button>' +
+      '</div>' +
+    '</div>' +
+    '<button class="btn-tool danger" id="deleteSelectedBtn" type="button" disabled>删除</button>' +
     (view === 'single' ? '<button class="btn-tool" id="addSingleProductButton" type="button" style="color:var(--ink);font-weight:500;">＋ 添加商品</button>' : '') +
     '<button class="btn-tool" id="toolbarSettingsBtn" type="button">' +
       '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' +
@@ -342,15 +354,22 @@ function productToolbar(products) {
       '刷新' +
     '</button>';
 
-  document.querySelector('#toolbarSearch').addEventListener('input', () => { productPage = 1; renderCurrentProductList(); });
+  document.querySelector('#toolbarSearch').addEventListener('input', () => { selectedProductIds.clear(); productPage = 1; renderCurrentProductList(); });
   document.querySelector('#sortSelect').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
-  document.querySelector('#statusFilter').addEventListener('change', () => { productPage = 1; renderCurrentProductList(); });
+  document.querySelector('#statusFilter').addEventListener('change', () => { selectedProductIds.clear(); productPage = 1; renderCurrentProductList(); });
   document.querySelector('#productPageSize').addEventListener('change', e => {
     productPageSize = Number(e.target.value) || 50;
     productPage = 1;
     renderCurrentProductList();
   });
-  document.querySelector('#batchExportBtn').addEventListener('click', openExportDialog);
+  document.querySelector('#exportMenuBtn').addEventListener('click', () => {
+    const menu = document.querySelector('#exportMenu');
+    menu.hidden = !menu.hidden;
+    document.querySelector('#exportMenuBtn').setAttribute('aria-expanded', String(!menu.hidden));
+  });
+  document.querySelector('#exportAllBtn').addEventListener('click', () => openExportDialog('all'));
+  document.querySelector('#exportSelectedBtn').addEventListener('click', () => openExportDialog('selected'));
+  document.querySelector('#deleteSelectedBtn').addEventListener('click', deleteSelectedProducts);
   document.querySelector('#addSingleProductButton')?.addEventListener('click', () => openProductImport('single'));
   document.querySelector('#toolbarSettingsBtn')?.addEventListener('click', openSettings);
   document.querySelector('#refreshBtn').addEventListener('click', refreshCurrentViewData);
@@ -402,7 +421,8 @@ function productRow(product, context) {
   const paused = product.monitor_state === 'paused';
   const selected = Number(product.in_selection_pool) === 1;
   const inShop = Number(product.in_shop_monitor) === 1;
-  const isRowSelected = product.id === selectedProductId;
+  const isRowActive = product.id === selectedProductId;
+  const isChecked = selectedProductIds.has(product.id);
   const shopInfo = getShopInfo(product);
 
   const imgUrl = product.image_url || '';
@@ -417,8 +437,8 @@ function productRow(product, context) {
     ? '<div class="shop-sub">' + shopSubParts.join('<span style="color:var(--line);margin:0 2px;">|</span>') + '</div>'
     : '';
 
-  return '<tr class="product-row ' + (isRowSelected ? 'selected-row' : '') + '" data-product-id="' + product.id + '">' +
-    '<td style="width:36px;"><input type="checkbox" class="row-checkbox" ' + (isRowSelected ? 'checked' : '') + ' onclick="event.stopPropagation()"></td>' +
+  return '<tr class="product-row ' + (isRowActive ? 'selected-row' : '') + '" data-product-id="' + product.id + '">' +
+    '<td style="width:36px;"><input type="checkbox" class="row-checkbox" aria-label="选择商品" ' + (isChecked ? 'checked' : '') + ' onclick="event.stopPropagation()"></td>' +
     '<td>' +
       '<div class="product">' +
         imgHtml +
@@ -474,12 +494,13 @@ function renderProductTable(products, context, total) {
       '</div>' + pager;
     if (dockCard) dockCard.hidden = true;
     bindProductPager();
+    updateSelectionControls();
     return;
   }
 
   content.innerHTML =
     '<div class="tablewrap"><table class="product-data-table"><thead><tr>' +
-    '<th style="width:36px;"></th>' +
+    '<th style="width:36px;"><input type="checkbox" id="selectAllProducts" aria-label="全选当前筛选结果"></th>' +
     '<th style="min-width:200px;">商品</th>' +
     '<th style="width:130px;">店铺</th>' +
     '<th style="width:80px;">当前价格</th>' +
@@ -497,6 +518,7 @@ function renderProductTable(products, context, total) {
 
   bindProductPager();
   bindTableEvents();
+  updateSelectionControls();
 
   if (savedScrollTop !== null) {
     const newScrollWrap = document.querySelector('.tablewrap');
@@ -544,7 +566,7 @@ function renderProductPager(total) {
   }
 
   return '<div class="pager">' +
-    '<div class="pager-left">共 ' + total + ' 条数据，已选择 1 条</div>' +
+    '<div class="pager-left">共 ' + total + ' 条数据，已选择 ' + selectedProductIds.size + ' 条</div>' +
     '<div class="pager-right">' +
       '<button class="page-btn" id="productPrev"' + (productPage <= 1 ? ' disabled' : '') + '>‹</button>' +
       pageBtnsHtml +
@@ -563,8 +585,6 @@ function bindTableEvents() {
       document.querySelectorAll('.product-row').forEach(r => {
         const isTarget = Number(r.dataset.productId) === id;
         r.classList.toggle('selected-row', isTarget);
-        const cb = r.querySelector('.row-checkbox');
-        if (cb) cb.checked = isTarget;
       });
       const prod = allProducts.find(p => p.id === id);
       if (prod) renderDockPanel(prod);
@@ -572,12 +592,27 @@ function bindTableEvents() {
   });
 
   document.querySelectorAll('.row-checkbox').forEach(checkbox => {
-    checkbox.addEventListener('click', event => {
-      event.preventDefault();
+    checkbox.addEventListener('change', event => {
       event.stopPropagation();
-      checkbox.closest('.product-row')?.click();
+      const id = Number(checkbox.closest('.product-row')?.dataset.productId);
+      if (!id) return;
+      applyProductSelection(selectedProductIds, [{id}], checkbox.checked);
+      selectedProductId = id;
+      renderCurrentProductList();
     });
   });
+
+  const selectAll = document.querySelector('#selectAllProducts');
+  if (selectAll) {
+    const filtered = currentFilteredProducts();
+    const selectedCount = filtered.filter(product => selectedProductIds.has(product.id)).length;
+    selectAll.checked = filtered.length > 0 && selectedCount === filtered.length;
+    selectAll.indeterminate = selectedCount > 0 && selectedCount < filtered.length;
+    selectAll.addEventListener('change', () => {
+      applyProductSelection(selectedProductIds, filtered, selectAll.checked);
+      renderCurrentProductList();
+    });
+  }
 
   document.querySelectorAll('.more-btn').forEach(btn => {
     btn.addEventListener('click', () => openActionPanel(btn));
@@ -825,6 +860,27 @@ function currentFilteredProducts() {
   return filterAndSortProducts(currentProductSource());
 }
 
+function applyProductSelection(selection, products, checked) {
+  products.forEach(product => checked ? selection.add(product.id) : selection.delete(product.id));
+}
+
+function pruneSelectedProducts() {
+  const validIds = new Set(allProducts.map(product => product.id));
+  selectedProductIds.forEach(id => {
+    if (!validIds.has(id)) selectedProductIds.delete(id);
+  });
+}
+
+function updateSelectionControls() {
+  const count = selectedProductIds.size;
+  const exportSelected = document.querySelector('#exportSelectedBtn');
+  const deleteSelected = document.querySelector('#deleteSelectedBtn');
+  const countLabel = document.querySelector('#selectedExportCount');
+  if (exportSelected) exportSelected.disabled = count === 0;
+  if (deleteSelected) deleteSelected.disabled = count === 0;
+  if (countLabel) countLabel.textContent = String(count);
+}
+
 function currentProductPageItems() {
   const products = currentFilteredProducts();
   const pages = Math.max(1, Math.ceil(products.length / productPageSize));
@@ -885,6 +941,7 @@ function renderCurrentProductList() {
 async function loadSinglePage({keepNotice = false} = {}) {
   cachedTrends = {};
   allProducts = await api('/api/products');
+  pruneSelectedProducts();
   productHeader(allProducts, false);
   productToolbar(allProducts);
   renderCurrentProductList();
@@ -894,6 +951,7 @@ async function loadSinglePage({keepNotice = false} = {}) {
 async function loadSelectionPage({keepNotice = false} = {}) {
   cachedTrends = {};
   allProducts = await api('/api/selection');
+  pruneSelectedProducts();
   productHeader(allProducts, true);
   productToolbar(allProducts);
   renderCurrentProductList();
@@ -939,7 +997,7 @@ function shopsToolbar() {
 
   document.querySelector('#toolbarSearch').addEventListener('input', () => { shopPage = 1; renderShopList(); });
   document.querySelector('#shopSort').addEventListener('change', () => { shopPage = 1; renderShopList(); });
-  document.querySelector('#exportButton').addEventListener('click', openExportDialog);
+  document.querySelector('#exportButton').addEventListener('click', () => openExportDialog('all'));
   document.querySelector('#addShopProductButton').addEventListener('click', () => openProductImport('shop'));
   document.querySelector('#collectShopPageButton').addEventListener('click', collectVisibleShopProducts);
   document.querySelector('#settingsButton').addEventListener('click', openSettings);
@@ -1183,7 +1241,7 @@ function shopExportRows(shops) {
   return rows;
 }
 
-function currentExportPayload() {
+function currentExportPayload(scope = exportScope) {
   if (view === 'shops') {
     const shops = filteredSortedShops();
     const rows = shopExportRows(shops);
@@ -1193,7 +1251,7 @@ function currentExportPayload() {
       summary:shops.length + ' 家店铺 · ' + rows.length + ' 条商品明细'
     };
   }
-  const products = currentFilteredProducts();
+  const products = currentFilteredProducts().filter(product => scope !== 'selected' || selectedProductIds.has(product.id));
   return {
     module:view === 'selection' ? 'selection' : 'single',
     rows:products.map(productExportRow),
@@ -1205,14 +1263,56 @@ function closeExportDialog() {
   exportOverlay.hidden = true;
 }
 
-function openExportDialog() {
-  const payload = currentExportPayload();
-  exportSummary.textContent = '当前筛选结果：' + payload.summary + '。导出将包含全部筛选结果，不受当前页限制。';
+function openExportDialog(scope = 'all') {
+  exportScope = scope;
+  const menu = document.querySelector('#exportMenu');
+  if (menu) {
+    menu.hidden = true;
+    document.querySelector('#exportMenuBtn')?.setAttribute('aria-expanded', 'false');
+  }
+  const payload = currentExportPayload(scope);
+  const selected = scope === 'selected' && view !== 'shops';
+  exportTitle.textContent = selected ? '导出选中商品' : '导出当前筛选结果';
+  exportDescription.textContent = selected
+    ? '导出已勾选的商品，不受当前分页限制。'
+    : '导出的不是当前页，而是当前搜索、筛选和排序条件下的全部结果。';
+  exportSummary.textContent = (selected ? '已选中：' : '当前筛选结果：') + payload.summary + '。';
   const empty = payload.rows.length === 0;
   exportCsv.disabled = empty;
   exportXlsx.disabled = empty;
   exportOverlay.hidden = false;
   exportClose.focus();
+}
+
+async function deleteSelectedProducts() {
+  const ids = allProducts.filter(product => selectedProductIds.has(product.id)).map(product => product.id);
+  if (!ids.length || !confirm('确认删除选中的 ' + ids.length + ' 个商品？商品主体和历史采集数据都会保留。')) return;
+
+  const button = document.querySelector('#deleteSelectedBtn');
+  if (button) button.disabled = true;
+  const endpoint = view === 'selection' ? 'selection' : 'monitor';
+  const failures = [];
+  for (const id of ids) {
+    try {
+      await api('/api/products/' + id + '/' + endpoint, {method:'DELETE'});
+      selectedProductIds.delete(id);
+    } catch (error) {
+      failures.push(error.message || '请求失败');
+    }
+  }
+
+  try {
+    await reloadCurrentView(true);
+  } catch (error) {
+    updateSelectionControls();
+    showNotice('删除操作已执行，但列表刷新失败：' + (error.message || '请求失败'), 'error');
+    return;
+  }
+  if (failures.length) {
+    showNotice('已删除 ' + (ids.length - failures.length) + ' 个，另有 ' + failures.length + ' 个删除失败：' + failures[0], 'error');
+  } else {
+    showNotice('已删除选中的 ' + ids.length + ' 个商品；商品主体和历史数据均保留。', 'success');
+  }
 }
 
 function submitExport(format) {
@@ -1426,6 +1526,7 @@ async function refreshCurrentViewData() {
       const nextProducts = await api(view === 'single' ? '/api/products' : '/api/selection');
       if (JSON.stringify(nextProducts) === JSON.stringify(allProducts)) return;
       allProducts = nextProducts;
+      pruneSelectedProducts();
       productHeader(allProducts, view === 'selection');
       renderCurrentProductList();
       const selectedProduct = allProducts.find(product => product.id === selectedProductId);
@@ -1702,6 +1803,13 @@ content.addEventListener('click', event => {
 toolbar.addEventListener('click', event => {
   const more = event.target.closest('button[data-more-product-id]');
   if (more) openActionPanel(more);
+});
+
+document.addEventListener('click', event => {
+  const menu = document.querySelector('#exportMenu');
+  if (!menu || event.target.closest('.toolbar-menu')) return;
+  menu.hidden = true;
+  document.querySelector('#exportMenuBtn')?.setAttribute('aria-expanded', 'false');
 });
 
 actionOverlay.addEventListener('click', event => {

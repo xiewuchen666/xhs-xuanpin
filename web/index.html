@@ -247,6 +247,36 @@
       gap: 4px;
     }
     .btn-tool:hover { background: #FAFAFA; border-color: #BDBDBD; }
+    .btn-tool:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-tool.danger { color: var(--danger); }
+    .toolbar-menu { position: relative; display: inline-flex; }
+    .toolbar-menu-list {
+      position: absolute;
+      top: 36px;
+      right: 0;
+      z-index: 20;
+      min-width: 132px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, .12);
+    }
+    .toolbar-menu-list[hidden] { display: none; }
+    .toolbar-menu-list button {
+      width: 100%;
+      height: 32px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--ink2);
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .toolbar-menu-list button:hover { background: #F7F8FA; }
+    .toolbar-menu-list button:disabled { color: var(--ink3); cursor: not-allowed; }
 
     .notice {
       margin: 0 14px 10px;
@@ -833,7 +863,7 @@
   <div class="action-overlay" id="exportOverlay" hidden>
     <section class="export-panel" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
       <div class="action-panel-head">
-        <div class="action-panel-copy"><h2 id="exportTitle">导出当前筛选结果</h2><p>导出的不是当前页，而是当前搜索、筛选和排序条件下的全部结果。</p></div>
+        <div class="action-panel-copy"><h2 id="exportTitle">导出当前筛选结果</h2><p id="exportDescription">导出的不是当前页，而是当前搜索、筛选和排序条件下的全部结果。</p></div>
         <button class="action-close" id="exportClose" type="button" aria-label="关闭">×</button>
       </div>
       <div class="export-summary" id="exportSummary">正在统计可导出数据…</div>
@@ -890,6 +920,6 @@
       <div class="trend-note" id="trendNote"></div>
     </section>
   </div>
-  <script src="/app.js?v=2.3.7"></script>
+  <script src="/app.js?v=2.3.8"></script>
 </body>
 </html>

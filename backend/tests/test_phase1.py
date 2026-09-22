@@ -145,6 +145,18 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertEqual(trend["hourly"][0]["value"], 3)
         self.assertEqual(trend["daily"][-1]["value"], 3)
 
+    def test_2355_baseline_before_next_sample_is_not_reported_missing(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-22 23:55:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-22 23:55:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-23", "baseline_slot": "2355"},
+        ]
+
+        result = metrics.enrich(product, snapshots, as_of="2026-09-23 00:05:00")
+
+        self.assertIsNone(result["today"]["value"])
+        self.assertNotIn("baseline_missing", result["today"])
+        self.assertEqual(result["health_label"], "数据已更新")
+
     def test_2355_baseline_can_anchor_rolling_24_hours_at_its_real_time(self):
         product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-21 23:55:00"}
         snapshots = [
