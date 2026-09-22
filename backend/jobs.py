@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATUSES = {"success", "partial", "failed", "blocked", "cancelled", "interrupted"}
 BASELINE_SLOTS = {"2355"}
 RETRY_DELAY_SECONDS = 30
+RETRY_PREFIX = "首次失败，等待重试："
 
 
 def safe_error(exc: Exception) -> str:
@@ -299,15 +300,155 @@ def baseline_day(created_at: str, slot: str | None) -> str:
     return day.isoformat()
 
 
+def _midnight_waiting() -> bool:
+    with closing(db.connect()) as conn:
+        return bool(conn.execute(
+            "SELECT 1 FROM jobs WHERE status='queued' AND cancel_requested=0 AND is_midnight=1 LIMIT 1"
+        ).fetchone())
+
+
+def _job_cancelled(job_id: int) -> bool:
+    with closing(db.connect()) as conn:
+        row = conn.execute("SELECT cancel_requested FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return not row or bool(row["cancel_requested"])
+
+
+def _collect_batch(items: list[dict[str, Any]], collect_fn, should_continue) -> dict[int, dict[str, Any] | Exception]:
+    if collect_fn is None:
+        return collector_module.collect_products(
+            [(int(item["id"]), str(item["url"])) for item in items],
+            max_pages=4,
+            should_continue=should_continue,
+        )
+    results: dict[int, dict[str, Any] | Exception] = {}
+    for item in items:
+        if not should_continue():
+            break
+        try:
+            results[int(item["id"])] = collect_fn(str(item["url"]))
+        except Exception as exc:
+            results[int(item["id"])] = exc
+            if requires_verification(safe_error(exc)):
+                break
+    return results
+
+
+def _persist_item(job: dict[str, Any], item: dict[str, Any], data: dict[str, Any]) -> None:
+    if job["kind"] == "import":
+        existing = db.get_product_by_item_id(str(data.get("item_id") or "").strip())
+        if existing:
+            product_id = int(existing["id"])
+            duplicate = db.join_existing_scope(product_id, str(job["scope"]))
+            message = (
+                {
+                    "single": "已加入监控",
+                    "shop": "已加入店铺监控",
+                    "selection": "已加入选品中心",
+                }[job["scope"]]
+                if duplicate
+                else {
+                    "single": "已恢复监控",
+                    "shop": "已重新加入店铺监控",
+                    "selection": "已重新加入选品中心",
+                }[job["scope"]]
+            )
+            with closing(db.connect()) as conn, conn:
+                conn.execute(
+                    "UPDATE job_items SET product_id=?,status=?,message=?,finished_at=? WHERE id=?",
+                    (product_id, "skipped" if duplicate else "success", message, db.now_text(), item["id"]),
+                )
+            return
+        product_id = db.persist(
+            str(item["url"]),
+            data,
+            join_single=(job["scope"] == "single"),
+            join_shop=(job["scope"] == "shop"),
+            is_midnight=False,
+        )
+        if job["scope"] == "selection":
+            db.add_selection(product_id)
+    else:
+        product_id = int(item["product_id"])
+        db.persist(
+            str(item["url"]),
+            data,
+            join_single=False,
+            expected_product_id=product_id,
+            is_midnight=bool(job["is_midnight"]),
+            baseline_day=baseline_day(str(job["created_at"]), job.get("baseline_slot")),
+            baseline_slot=job.get("baseline_slot"),
+        )
+
+    with closing(db.connect()) as conn, conn:
+        conn.execute(
+            "UPDATE job_items SET product_id=?,status='success',message='已保存观测记录',finished_at=? WHERE id=?",
+            (product_id, db.now_text(), item["id"]),
+        )
+    logger.info(
+        "Job item succeeded: job=%s item=%s product=%s",
+        job["id"],
+        item["id"],
+        product_id,
+    )
+
+
+def _finish_job(job_id: int, blocked: bool = False) -> None:
+    with closing(db.connect()) as conn, conn:
+        current = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not current:
+            return
+        if blocked or current["cancel_requested"]:
+            conn.execute(
+                """
+                UPDATE job_items SET status='cancelled',message=?,finished_at=?
+                WHERE job_id=? AND status IN ('queued','running')
+                """,
+                (
+                    "需先人工处理验证/登录，再手动重试" if blocked else "用户取消",
+                    db.now_text(),
+                    job_id,
+                ),
+            )
+        counts = {
+            str(row["status"]): int(row["n"])
+            for row in conn.execute(
+                "SELECT status,COUNT(*) n FROM job_items WHERE job_id=? GROUP BY status",
+                (job_id,),
+            )
+        }
+        if blocked:
+            status, error = "blocked", "需要人工处理验证或登录；本任务已停止"
+        elif current["cancel_requested"]:
+            status, error = "cancelled", None
+        elif counts.get("failed") and counts.get("success"):
+            status, error = "partial", None
+        elif counts.get("failed"):
+            status, error = "failed", None
+        else:
+            status, error = "success", None
+        conn.execute(
+            "UPDATE jobs SET status=?,finished_at=?,error=? WHERE id=?",
+            (status, db.now_text(), error, job_id),
+        )
+    logger.info(
+        "Job finished: job=%s status=%s success=%s failed=%s skipped=%s cancelled=%s",
+        job_id,
+        status,
+        counts.get("success", 0),
+        counts.get("failed", 0),
+        counts.get("skipped", 0),
+        counts.get("cancelled", 0),
+    )
+
+
 def process_next(collect_fn=None) -> bool:
-    collect_fn = collect_fn or collector_module.collect_product
     with closing(db.connect()) as conn, conn:
         conn.execute("BEGIN IMMEDIATE")
         raw = conn.execute(
             """
             SELECT * FROM jobs
             WHERE status='queued' AND cancel_requested=0
-            ORDER BY id
+            ORDER BY is_midnight DESC,id
             LIMIT 1
             """
         ).fetchone()
@@ -332,221 +473,134 @@ def process_next(collect_fn=None) -> bool:
             current = conn.execute("SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone()
             if not current or current["cancel_requested"]:
                 break
-            item_raw = conn.execute(
-                """
-                SELECT * FROM job_items
-                WHERE job_id=? AND status='queued'
-                ORDER BY id
-                LIMIT 1
-                """,
-                (job["id"],),
-            ).fetchone()
-            if not item_raw:
+            queued = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM job_items WHERE job_id=? AND status='queued' ORDER BY id",
+                    (job["id"],),
+                )
+            ]
+            if not queued:
                 break
-            item = dict(item_raw)
-            conn.execute(
-                "UPDATE job_items SET status='running',started_at=? WHERE id=?",
-                (db.now_text(), item["id"]),
+        if not bool(job["is_midnight"]) and _midnight_waiting():
+            with closing(db.connect()) as conn, conn:
+                conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))
+            logger.info("Ordinary job yielded to midnight baseline: job=%s", job["id"])
+            return True
+
+        if job["kind"] == "collect":
+            eligible_ids = {
+                int(product["id"])
+                for product in db.get_monitored_products_raw(job["scope"])
+            }
+            skipped = [item for item in queued if int(item["product_id"]) not in eligible_ids]
+            if skipped:
+                with closing(db.connect()) as conn, conn:
+                    conn.executemany(
+                        """
+                        UPDATE job_items SET status='skipped',message='商品已暂停或移出持续监控范围',finished_at=?
+                        WHERE id=?
+                        """,
+                        [(db.now_text(), item["id"]) for item in skipped],
+                    )
+                queued = [item for item in queued if int(item["product_id"]) in eligible_ids]
+                if not queued:
+                    continue
+
+        retrying = {
+            int(item["id"])
+            for item in queued
+            if str(item.get("message") or "").startswith(RETRY_PREFIX)
+        }
+        with closing(db.connect()) as conn, conn:
+            conn.executemany(
+                "UPDATE job_items SET status='running',started_at=?,finished_at=NULL WHERE id=?",
+                [(db.now_text(), item["id"]) for item in queued],
+            )
+
+        def should_continue() -> bool:
+            return not _job_cancelled(int(job["id"])) and (
+                bool(job["is_midnight"]) or not _midnight_waiting()
             )
 
         try:
-            if job["kind"] == "collect":
-                product = db.get_product(int(item["product_id"]))
-                eligible_ids = {
-                    int(product_row["id"])
-                    for product_row in db.get_monitored_products_raw(job["scope"])
-                }
-                if (
-                    not product
-                    or product.get("monitor_state") != "active"
-                    or int(item["product_id"]) not in eligible_ids
-                ):
-                    with closing(db.connect()) as conn, conn:
-                        conn.execute(
-                            """
-                            UPDATE job_items
-                            SET status='skipped',
-                                message='商品已暂停或移出持续监控范围',
-                                finished_at=?
-                            WHERE id=?
-                            """,
-                            (db.now_text(), item["id"]),
-                        )
-                    continue
-
-            try:
-                data = collect_fn(str(item["url"]))
-            except Exception as first_error:
-                first_message = safe_error(first_error)
-                if requires_verification(first_message):
-                    raise
-                logger.warning(
-                    "Job item first attempt failed; retrying in %ss: job=%s item=%s reason=%s",
-                    RETRY_DELAY_SECONDS,
-                    job["id"],
-                    item["id"],
-                    first_message,
-                )
-                time.sleep(RETRY_DELAY_SECONDS)
-                data = collect_fn(str(item["url"]))
-                logger.info(
-                    "Job item retry succeeded: job=%s item=%s",
-                    job["id"],
-                    item["id"],
-                )
-
-            if job["kind"] == "import":
-                existing = db.get_product_by_item_id(
-                    str(data.get("item_id") or "").strip()
-                )
-                if existing:
-                    product_id = int(existing["id"])
-                    duplicate = db.join_existing_scope(product_id, str(job["scope"]))
-                    message = (
-                        {
-                            "single": "已加入监控",
-                            "shop": "已加入店铺监控",
-                            "selection": "已加入选品中心",
-                        }[job["scope"]]
-                        if duplicate
-                        else {
-                            "single": "已恢复监控",
-                            "shop": "已重新加入店铺监控",
-                            "selection": "已重新加入选品中心",
-                        }[job["scope"]]
-                    )
-                    with closing(db.connect()) as conn, conn:
-                        conn.execute(
-                            """
-                            UPDATE job_items
-                            SET product_id=?,status=?,message=?,finished_at=?
-                            WHERE id=?
-                            """,
-                            (
-                                product_id,
-                                "skipped" if duplicate else "success",
-                                message,
-                                db.now_text(),
-                                item["id"],
-                            ),
-                        )
-                    continue
-
-                product_id = db.persist(
-                    str(item["url"]),
-                    data,
-                    join_single=(job["scope"] == "single"),
-                    join_shop=(job["scope"] == "shop"),
-                    is_midnight=False,
-                )
-                if job["scope"] == "selection":
-                    db.add_selection(product_id)
-            else:
-                product_id = int(item["product_id"])
-                db.persist(
-                    str(item["url"]),
-                    data,
-                    join_single=False,
-                    expected_product_id=product_id,
-                    is_midnight=bool(job["is_midnight"]),
-                    baseline_day=baseline_day(str(job["created_at"]), job.get("baseline_slot")),
-                    baseline_slot=job.get("baseline_slot"),
-                )
-
-            with closing(db.connect()) as conn, conn:
-                conn.execute(
-                    """
-                    UPDATE job_items
-                    SET product_id=?,status='success',message='已保存观测记录',finished_at=?
-                    WHERE id=?
-                    """,
-                    (product_id, db.now_text(), item["id"]),
-                )
-            logger.info(
-                "Job item succeeded: job=%s item=%s product=%s",
-                job["id"],
-                item["id"],
-                product_id,
-            )
+            results = _collect_batch(queued, collect_fn, should_continue)
         except Exception as exc:
-            message = safe_error(exc)
-            logger.warning("Job %s item %s failed: %s", job["id"], item["id"], message)
-            if item.get("product_id"):
+            results = {int(item["id"]): exc for item in queued}
+
+        processed = set(results)
+        unprocessed = [item for item in queued if int(item["id"]) not in processed]
+        if unprocessed:
+            with closing(db.connect()) as conn, conn:
+                conn.executemany(
+                    "UPDATE job_items SET status='queued',started_at=NULL,finished_at=NULL WHERE id=?",
+                    [(item["id"],) for item in unprocessed],
+                )
+
+        first_failures = 0
+        for item in queued:
+            item_id = int(item["id"])
+            if item_id not in results:
+                continue
+            result = results[item_id]
+            if not isinstance(result, Exception):
+                _persist_item(job, item, result)
+                if item_id in retrying:
+                    logger.info("Job item retry succeeded: job=%s item=%s", job["id"], item_id)
+                continue
+
+            message = safe_error(result)
+            logger.warning("Job %s item %s failed: %s", job["id"], item_id, message)
+            verification = requires_verification(message)
+            final_failure = verification or item_id in retrying
+            if final_failure and item.get("product_id"):
                 db.mark_product_error(int(item["product_id"]), message)
             with closing(db.connect()) as conn, conn:
                 conn.execute(
-                    """
-                    UPDATE job_items
-                    SET status='failed',message=?,finished_at=?
-                    WHERE id=?
-                    """,
-                    (message, db.now_text(), item["id"]),
+                    "UPDATE job_items SET status=?,message=?,finished_at=? WHERE id=?",
+                    (
+                        "failed" if final_failure else "queued",
+                        message if final_failure else RETRY_PREFIX + message,
+                        db.now_text(),
+                        item_id,
+                    ),
                 )
-            if requires_verification(message):
+            if verification:
                 blocked = True
                 logger.error(
                     "Job blocked by verification requirement: job=%s item=%s reason=%s",
                     job["id"],
-                    item["id"],
+                    item_id,
                     message,
                 )
-                break
+            elif not final_failure:
+                first_failures += 1
 
-    with closing(db.connect()) as conn, conn:
-        current = conn.execute("SELECT * FROM jobs WHERE id=?", (job["id"],)).fetchone()
-        if not current:
-            return True
-        if blocked or current["cancel_requested"]:
-            conn.execute(
-                """
-                UPDATE job_items
-                SET status='cancelled',message=?,finished_at=?
-                WHERE job_id=? AND status='queued'
-                """,
-                (
-                    "需先人工处理验证/登录，再手动重试"
-                    if blocked
-                    else "用户取消",
-                    db.now_text(),
-                    job["id"],
-                ),
-            )
-        counts = {
-            str(row["status"]): int(row["n"])
-            for row in conn.execute(
-                "SELECT status,COUNT(*) n FROM job_items WHERE job_id=? GROUP BY status",
-                (job["id"],),
-            )
-        }
         if blocked:
-            status = "blocked"
-            error = "需要人工处理验证或登录；本任务已停止"
-        elif current["cancel_requested"]:
-            status = "cancelled"
-            error = None
-        elif counts.get("failed") and counts.get("success"):
-            status = "partial"
-            error = None
-        elif counts.get("failed"):
-            status = "failed"
-            error = None
-        else:
-            status = "success"
-            error = None
-        conn.execute(
-            "UPDATE jobs SET status=?,finished_at=?,error=? WHERE id=?",
-            (status, db.now_text(), error, job["id"]),
-        )
+            break
+        if unprocessed:
+            with closing(db.connect()) as conn, conn:
+                conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))
+            return True
+        if first_failures:
+            logger.warning(
+                "Job batch has %s first-attempt failures; retrying in %ss: job=%s",
+                first_failures,
+                RETRY_DELAY_SECONDS,
+                job["id"],
+            )
+            if collect_fn is not None:
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                deadline = time.monotonic() + RETRY_DELAY_SECONDS
+                while time.monotonic() < deadline:
+                    if _job_cancelled(int(job["id"])) or (not bool(job["is_midnight"]) and _midnight_waiting()):
+                        with closing(db.connect()) as conn, conn:
+                            conn.execute("UPDATE jobs SET status='queued' WHERE id=?", (job["id"],))
+                        return True
+                    time.sleep(min(0.5, deadline - time.monotonic()))
 
-    logger.info(
-        "Job finished: job=%s status=%s success=%s failed=%s skipped=%s cancelled=%s",
-        job["id"],
-        status,
-        counts.get("success", 0),
-        counts.get("failed", 0),
-        counts.get("skipped", 0),
-        counts.get("cancelled", 0),
-    )
+    _finish_job(int(job["id"]), blocked)
     return True
 
 

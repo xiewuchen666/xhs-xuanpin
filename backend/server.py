@@ -169,59 +169,10 @@ def create_app(testing: bool = False) -> Flask:
             if scope not in {"single", "shop", "selection"}:
                 return _api_error("无效加入范围")
             url = collector.validate_url(body.get("url", ""))
-            data = collector.collect_product(url)
-            existing = db.get_product_by_item_id(str(data.get("item_id") or "").strip())
-            if existing:
-                product_id = int(existing["id"])
-                duplicate = db.join_existing_scope(product_id, scope)
-                message = (
-                    {
-                        "single": "已加入监控",
-                        "shop": "已加入店铺监控",
-                        "selection": "已加入选品中心",
-                    }[scope]
-                    if duplicate
-                    else {
-                        "single": "已恢复监控",
-                        "shop": "已重新加入店铺监控",
-                        "selection": "已重新加入选品中心",
-                    }[scope]
-                )
-                return jsonify(
-                    ok=True,
-                    product_id=product_id,
-                    product=existing,
-                    scope=scope,
-                    duplicate=duplicate,
-                    restored=not duplicate,
-                    message=message,
-                )
-            product_id = db.persist(
-                url,
-                data,
-                join_single=(scope == "single"),
-                join_shop=(scope == "shop"),
-            )
-            if scope == "selection":
-                db.add_selection(product_id)
-            return jsonify(
-                ok=True,
-                product_id=product_id,
-                product=data,
-                scope=scope,
-                duplicate=False,
-                restored=False,
-                message={
-                    "single": "已加入监控",
-                    "shop": "已加入店铺监控",
-                    "selection": "已加入选品中心",
-                }[scope],
-            )
-        except (ValueError, RuntimeError) as exc:
+            job_id = jobs.enqueue(scope, urls=[url], kind="import")
+            return jsonify(ok=True, job_id=job_id, queued=True, count=1, scope=scope), 202
+        except ValueError as exc:
             return _api_error(str(exc))
-        except Exception:
-            app.logger.exception("collect failed")
-            return _api_error("采集失败，请查看本地日志", 500)
 
     @app.post("/api/products/<int:product_id>/collect")
     def collect_one(product_id: int):
@@ -369,6 +320,9 @@ def configure_scheduler(app: Flask) -> None:
 
     def submit(baseline_slot: str | None = None) -> None:
         trigger = f"midnight-{baseline_slot}" if baseline_slot else "interval"
+        if baseline_slot is None and metrics.now().hour in {0, 1}:
+            app.logger.info("Scheduled collection skipped: trigger=%s reason=00:00-01:59 默认缺采窗口", trigger)
+            return
         app.logger.info("Scheduled collection trigger fired: %s", trigger)
         try:
             job_id = jobs.enqueue("all", baseline_slot=baseline_slot)
@@ -388,20 +342,35 @@ def configure_scheduler(app: Flask) -> None:
         interval = timedelta(minutes=int(cfg.get("auto_interval_minutes", "60")))
         current = metrics.now()
         last_run = metrics.timestamp(jobs.latest_successful_all_collection_at())
-        next_run = last_run + interval if last_run else current
-        if next_run <= current:
-            submit()
-            next_run = current + interval
-        scheduler.add_job(
-            submit,
-            "interval",
-            minutes=interval.total_seconds() / 60,
-            start_date=next_run,
-            id="auto_collect",
-            coalesce=True,
-            max_instances=1,
-            misfire_grace_time=60,
-        )
+        if interval == timedelta(hours=1):
+            if current.hour not in {0, 1} and (not last_run or last_run + interval <= current):
+                submit()
+            scheduler.add_job(
+                submit,
+                "cron",
+                hour="2-23",
+                minute=0,
+                id="auto_collect",
+                timezone=metrics.TZ,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=60,
+            )
+        else:
+            next_run = last_run + interval if last_run else current
+            if next_run <= current:
+                submit()
+                next_run = current + interval
+            scheduler.add_job(
+                submit,
+                "interval",
+                minutes=interval.total_seconds() / 60,
+                start_date=next_run,
+                id="auto_collect",
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=60,
+            )
     if cfg.get("midnight_enabled") == "1":
         for job_id, (hour, minute, slot) in midnight_jobs.items():
             scheduler.add_job(

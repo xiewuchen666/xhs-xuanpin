@@ -712,14 +712,17 @@ async function loadAndRenderDockTrend(product, forceRefresh = false) {
   const gapPoints = dockTrendMode === 'hourly'
     ? points.filter(point => point.gap && Number.isFinite(Number(point.average_hourly)))
     : [];
+  const statusPoints = dockTrendMode === 'hourly'
+    ? points.filter(point => point.gap_kind)
+    : [];
 
   if (noteEl) {
     noteEl.textContent = dockTrendMode === 'daily'
       ? '日销量按每日 23:55 基线计算；今日为截至最近一次有效采集的未完整数据。'
-      : '小时销量只显示普通全局采集区间；23:55 基线采样不展示，缺采用灰色虚线柱提示。';
+      : '小时销量不展示 23:55 基线；真实缺采用灰色虚线，异常读数排除用橙色虚线。';
   }
 
-  if (!valid.length && !gapPoints.length) {
+  if (!valid.length && !gapPoints.length && !statusPoints.length) {
     if (summaryEl) summaryEl.textContent = '暂无可计算的趋势点';
     container.innerHTML = '<div class="trend-empty" style="height:100%;display:grid;place-items:center;color:var(--ink3);font-size:12px;">采集历史不足，或当前区间存在待确认数据。</div>';
     return;
@@ -774,25 +777,33 @@ async function loadAndRenderDockTrend(product, forceRefresh = false) {
   const barWidth = Math.max(6, Math.min(20, innerWidth / Math.max(points.length, 1) * 0.65));
   const bars = dockTrendMode === 'hourly' ? points.map((point, index) => {
     const gap = point.gap && Number.isFinite(Number(point.average_hourly));
-    if (!gap && (point.value == null || !Number.isFinite(Number(point.value)))) return '';
+    const marker = point.gap_kind && !gap && (point.value == null || !Number.isFinite(Number(point.value)));
+    if (!gap && !marker && (point.value == null || !Number.isFinite(Number(point.value)))) return '';
     const value = gap ? Number(point.average_hourly) : Number(point.value);
-    const barHeight = Math.max(2, innerHeight * value / maximum);
+    const barHeight = marker ? 12 : Math.max(2, innerHeight * value / maximum);
     const detail = gap
       ? (point.from_time || '—') + ' 至 ' + point.time + '：区间共新增 +' + formatSales(point.gap_total) +
         '，平均每小时 ' + value.toLocaleString('zh-CN') + '（仅区间平均）'
+      : marker ? point.time + '：' + (point.reason || '异常读数已排除')
       : (point.from_time || '—') + ' 至 ' + point.time + '：+' + formatSales(point.value) + (point.reason ? '，' + point.reason : '');
+    const gapClass = point.gap_kind ? ' trend-bar-gap trend-bar-gap-' + point.gap_kind : '';
     return '<rect x="' + (xAt(index) - barWidth / 2) + '" y="' + (top + innerHeight - barHeight) +
-      '" width="' + barWidth + '" height="' + barHeight + '" rx="2" class="trend-bar' + (gap ? ' trend-bar-gap' : '') + '"><title>' +
+      '" width="' + barWidth + '" height="' + barHeight + '" rx="2" class="trend-bar' + gapClass + '"><title>' +
       esc(detail) + '</title></rect>';
   }).join('') : '';
 
   const latest = valid[valid.length - 1];
   const regularMaximum = valid.length ? Math.max(...valid.map(point => Number(point.value))) : null;
   if (summaryEl) {
+    const missingCount = statusPoints.filter(point => point.gap_kind === 'missing').length;
+    const anomalyCount = statusPoints.filter(point => point.gap_kind === 'anomaly').length;
+    const mixedCount = statusPoints.filter(point => point.gap_kind === 'mixed').length;
     summaryEl.textContent = '有效点 ' + valid.length + ' 个' +
       (latest ? ' · 最近 +' + formatSales(latest.value) : '') +
       (regularMaximum != null ? ' · 最高 +' + formatSales(regularMaximum) : '') +
-      (gapPoints.length ? ' · 缺采 ' + gapPoints.length + ' 个' : '');
+      (missingCount ? ' · 缺采 ' + missingCount + ' 个' : '') +
+      (anomalyCount ? ' · 异常排除 ' + anomalyCount + ' 个' : '') +
+      (mixedCount ? ' · 混合 ' + mixedCount + ' 个' : '');
   }
 
   const chartLabel = dockTrendMode === 'daily' ? '商品日销量折线图' : '商品小时销量柱状图';
@@ -1505,6 +1516,9 @@ function renderTrendChart() {
   const gapPoints = activeTrendMode === 'hourly'
     ? points.filter(point => point.gap && Number.isFinite(Number(point.average_hourly)))
     : [];
+  const statusPoints = activeTrendMode === 'hourly'
+    ? points.filter(point => point.gap_kind)
+    : [];
   trendTabs.forEach(tab => {
     const active = tab.dataset.trendMode === activeTrendMode;
     tab.classList.toggle('active', active);
@@ -1512,8 +1526,8 @@ function renderTrendChart() {
   });
   trendNote.textContent = activeTrendMode === 'daily'
     ? '日销量按每日 23:55 基线计算；今日为截至最近一次有效采集的未完整数据。'
-    : '小时销量只显示普通全局采集区间；23:55 基线采样不展示，缺采用灰色虚线柱提示。';
-  if (!valid.length && !gapPoints.length) {
+    : '小时销量不展示 23:55 基线；真实缺采用灰色虚线，异常读数排除用橙色虚线。';
+  if (!valid.length && !gapPoints.length && !statusPoints.length) {
     trendSummary.textContent = '暂无可计算的趋势点';
     trendChart.innerHTML = '<div class="trend-empty">采集历史不足，或当前区间存在待确认数据。</div>';
     return;
@@ -1558,22 +1572,30 @@ function renderTrendChart() {
   const barWidth = Math.max(8, Math.min(24, innerWidth / Math.max(points.length, 1) * 0.62));
   const bars = activeTrendMode === 'hourly' ? points.map((point, index) => {
     const gap = point.gap && Number.isFinite(Number(point.average_hourly));
-    if (!gap && (point.value == null || !Number.isFinite(Number(point.value)))) return '';
+    const marker = point.gap_kind && !gap && (point.value == null || !Number.isFinite(Number(point.value)));
+    if (!gap && !marker && (point.value == null || !Number.isFinite(Number(point.value)))) return '';
     const value = gap ? Number(point.average_hourly) : Number(point.value);
-    const barHeight = Math.max(2, innerHeight * value / maximum);
+    const barHeight = marker ? 16 : Math.max(2, innerHeight * value / maximum);
     const detail = gap
       ? (point.from_time || '—') + ' 至 ' + point.time + '：区间共新增 +' + formatSales(point.gap_total) +
         '，平均每小时 ' + value.toLocaleString('zh-CN') + '（仅区间平均）'
+      : marker ? point.time + '：' + (point.reason || '异常读数已排除')
       : (point.from_time || '—') + ' 至 ' + point.time + '：+' + formatSales(point.value) + '，' + (point.reason || '');
+    const gapClass = point.gap_kind ? ' trend-bar-gap trend-bar-gap-' + point.gap_kind : '';
     return '<rect x="' + (xAt(index) - barWidth / 2) + '" y="' + (top + innerHeight - barHeight) +
-      '" width="' + barWidth + '" height="' + barHeight + '" rx="2" class="trend-bar' + (gap ? ' trend-bar-gap' : '') + '"><title>' +
+      '" width="' + barWidth + '" height="' + barHeight + '" rx="2" class="trend-bar' + gapClass + '"><title>' +
       esc(detail) + '</title></rect>';
   }).join('') : '';
   const latest = valid[valid.length - 1];
   const regularMaximum = valid.length ? Math.max(...valid.map(point => Number(point.value))) : null;
+  const missingCount = statusPoints.filter(point => point.gap_kind === 'missing').length;
+  const anomalyCount = statusPoints.filter(point => point.gap_kind === 'anomaly').length;
+  const mixedCount = statusPoints.filter(point => point.gap_kind === 'mixed').length;
   trendSummary.textContent = '有效点 ' + valid.length + ' 个' +
     (latest ? ' · 最近 +' + formatSales(latest.value) + ' · 最高 +' + formatSales(regularMaximum) : '') +
-    (gapPoints.length ? ' · 缺采区间 ' + gapPoints.length + ' 个' : '');
+    (missingCount ? ' · 缺采 ' + missingCount + ' 个' : '') +
+    (anomalyCount ? ' · 异常排除 ' + anomalyCount + ' 个' : '') +
+    (mixedCount ? ' · 混合 ' + mixedCount + ' 个' : '');
   const chartLabel = activeTrendMode === 'daily' ? '商品日销量折线图' : '商品小时销量柱状图';
   trendChart.innerHTML = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="' + chartLabel + '">' +
     grid + labels + lines + circles + bars + '</svg>';

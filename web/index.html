@@ -655,7 +655,10 @@
     .trend-point { fill: #fff; stroke: var(--red); stroke-width: 2; cursor: pointer; }
     .trend-bar { fill: var(--red); opacity: 0.8; cursor: pointer; }
     .trend-bar:hover { opacity: 1; }
-    .trend-bar-gap { fill: #E8E8E8; stroke: #999; stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 1; }
+    .trend-bar-gap { stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 1; }
+    .trend-bar-gap-missing { fill: #E8E8E8; stroke: #777; }
+    .trend-bar-gap-anomaly { fill: #FFF3DA; stroke: #C87500; }
+    .trend-bar-gap-mixed { fill: #F3E8D4; stroke: #9A6A32; }
     .trend-empty { color: var(--ink3); font-size: 12px; }
     .trend-note { margin-top: 6px; color: var(--ink3); font-size: 11px; line-height: 1.4; }
     .trend-summary-text { font-size: 11px; color: var(--ink2); font-weight: 500; }
@@ -856,11 +859,11 @@
           <input class="settings-check" id="autoEnabledInput" type="checkbox">
         </label>
         <label class="settings-row">
-          <span class="settings-copy"><strong>采集间隔</strong><small>5–1440 分钟，默认 60 分钟</small></span>
+          <span class="settings-copy"><strong>采集间隔</strong><small>5–1440 分钟；默认 60 分钟时 02:00–23:00 整点采集</small></span>
           <input class="settings-number" id="autoIntervalInput" type="number" min="5" max="1440" step="1">
         </label>
         <label class="settings-row">
-          <span class="settings-copy"><strong>午夜基线采样</strong><small>每天 23:55 静默采集，作为次日今日销量基线</small></span>
+          <span class="settings-copy"><strong>午夜基线采样</strong><small>每天 23:55 最高优先级采集，固定作为次日基线</small></span>
           <input class="settings-check" id="midnightEnabledInput" type="checkbox">
         </label>
         <div class="settings-runtime" id="settingsRuntime">正在读取运行状态…</div>

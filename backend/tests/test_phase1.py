@@ -72,7 +72,30 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertTrue(trend["hourly"][-1]["gap"])
         self.assertEqual(trend["hourly"][-1]["gap_total"], 14)
         self.assertEqual(trend["hourly"][-1]["average_hourly"], 5.6)
+        self.assertEqual(trend["hourly"][-1]["gap_kind"], "missing")
         self.assertIn("2.5 小时", trend["hourly"][-1]["reason"])
+
+    def test_hourly_trend_distinguishes_excluded_anomaly_from_missing_collection(self):
+        anomaly = metrics.sales_trend(
+            [
+                {"id": 1, "collected_at": "2026-09-19 20:00:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact"},
+                {"id": 2, "collected_at": "2026-09-19 21:00:00", "total_sales": 90, "sales_raw": "已售90", "sales_precision": "exact"},
+                {"id": 3, "collected_at": "2026-09-19 22:00:00", "total_sales": 105, "sales_raw": "已售105", "sales_precision": "exact"},
+            ],
+            as_of="2026-09-19 22:00:00",
+        )
+        missing = metrics.sales_trend(
+            [
+                {"id": 1, "collected_at": "2026-09-19 20:00:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact"},
+                {"id": 2, "collected_at": "2026-09-19 23:00:00", "total_sales": 106, "sales_raw": "已售106", "sales_precision": "exact"},
+            ],
+            as_of="2026-09-19 23:00:00",
+        )
+
+        self.assertEqual(anomaly["hourly"][-1]["gap_kind"], "anomaly")
+        self.assertIn("异常", anomaly["hourly"][-1]["reason"])
+        self.assertEqual(missing["hourly"][-1]["gap_kind"], "missing")
+        self.assertIn("缺少连续采集", missing["hourly"][-1]["reason"])
 
     def test_hourly_trend_ignores_midnight_baseline_samples(self):
         snapshots = [
@@ -153,6 +176,20 @@ class MetricCompatibilityTests(unittest.TestCase):
         ]
         result = metrics.enrich(product, snapshots, as_of="2026-09-19 00:55:00")
         self.assertEqual(result["today"]["value"], 5)
+        self.assertEqual(result["today"]["from_time"], "2026-09-18 23:55:00")
+
+    def test_tagged_2355_baseline_wins_over_closer_ordinary_sample(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-19 02:00:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-18 23:00:00", "total_sales": 1508, "sales_raw": "已售1508", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-18 23:55:00", "total_sales": 1507, "sales_raw": "已售1507", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-19", "baseline_slot": "2355"},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-19 00:01:00", "total_sales": 1508, "sales_raw": "已售1508", "sales_precision": "exact", "price": 10},
+            {"id": 4, "product_id": 1, "collected_at": "2026-09-19 02:00:00", "total_sales": 1509, "sales_raw": "已售1509", "sales_precision": "exact", "price": 10},
+        ]
+
+        result = metrics.enrich(product, snapshots, as_of="2026-09-19 02:00:00")
+
+        self.assertEqual(result["today"]["value"], 2)
         self.assertEqual(result["today"]["from_time"], "2026-09-18 23:55:00")
 
     def test_lower_bound_sales_are_not_faked_into_growth(self):
@@ -375,15 +412,16 @@ class PhaseOneApiTests(unittest.TestCase):
         )
         new_url = "https://xiaohongshu.com/goods-detail/another-share-link"
 
-        with mock.patch("server.collector.collect_product", return_value=changed):
-            response = self.client.post(
-                "/api/products/collect",
-                json={"url": new_url, "scope": "single"},
-            )
+        response = self.client.post(
+            "/api/products/collect",
+            json={"url": new_url, "scope": "single"},
+        )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.get_json()["duplicate"])
-        self.assertEqual(response.get_json()["message"], "已加入监控")
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(jobs.process_next(lambda _url: changed))
+        item = jobs.get_job(response.get_json()["job_id"])["items"][0]
+        self.assertEqual(item["status"], "skipped")
+        self.assertEqual(item["message"], "已加入监控")
         product = db.get_product(self.product_id)
         self.assertEqual(product["url"], "https://xiaohongshu.com/goods-detail/api-one")
         self.assertEqual(product["title"], "API 商品")
@@ -391,16 +429,16 @@ class PhaseOneApiTests(unittest.TestCase):
         self.assertEqual(db.snapshot_count(self.product_id), 1)
 
         db.remove_single_monitor(self.product_id)
-        with mock.patch("server.collector.collect_product", return_value=changed):
-            response = self.client.post(
-                "/api/products/collect",
-                json={"url": new_url, "scope": "single"},
-            )
+        response = self.client.post(
+            "/api/products/collect",
+            json={"url": new_url, "scope": "single"},
+        )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.get_json()["duplicate"])
-        self.assertTrue(response.get_json()["restored"])
-        self.assertEqual(response.get_json()["message"], "已恢复监控")
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(jobs.process_next(lambda _url: changed))
+        item = jobs.get_job(response.get_json()["job_id"])["items"][0]
+        self.assertEqual(item["status"], "success")
+        self.assertEqual(item["message"], "已恢复监控")
         self.assertTrue(db.is_in_single_monitor(self.product_id))
         self.assertEqual(db.get_product(self.product_id)["url"], "https://xiaohongshu.com/goods-detail/api-one")
         self.assertEqual(db.snapshot_count(self.product_id), 1)

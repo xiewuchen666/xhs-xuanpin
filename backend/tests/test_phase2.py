@@ -379,13 +379,13 @@ class PhaseTwoApiTests(unittest.TestCase):
             shop_id="shop-direct",
             shop_name="直接选品店",
         )
-        with mock.patch("server.collector.collect_product", return_value=direct):
-            response = self.client.post(
-                "/api/products/collect",
-                json={"url": "https://xiaohongshu.com/goods-detail/direct-selection", "scope": "selection"},
-            )
-        self.assertEqual(response.status_code, 200)
-        product_id = response.get_json()["product_id"]
+        response = self.client.post(
+            "/api/products/collect",
+            json={"url": "https://xiaohongshu.com/goods-detail/direct-selection", "scope": "selection"},
+        )
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(jobs.process_next(lambda _url: direct))
+        product_id = jobs.get_job(response.get_json()["job_id"])["items"][0]["product_id"]
         self.assertFalse(db.is_in_single_monitor(product_id))
         selected = db.list_selection_products(as_of="2026-09-18 11:00:00")
         self.assertIn(product_id, [row["id"] for row in selected])
@@ -399,15 +399,16 @@ class PhaseTwoApiTests(unittest.TestCase):
             shop_name="不应覆盖的店铺",
             sales=999,
         )
-        with mock.patch("server.collector.collect_product", return_value=duplicate):
-            response = self.client.post(
-                "/api/products/collect",
-                json={"url": "https://xiaohongshu.com/goods-detail/selection-duplicate", "scope": "selection"},
-            )
+        response = self.client.post(
+            "/api/products/collect",
+            json={"url": "https://xiaohongshu.com/goods-detail/selection-duplicate", "scope": "selection"},
+        )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.get_json()["duplicate"])
-        self.assertEqual(response.get_json()["message"], "已加入选品中心")
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(jobs.process_next(lambda _url: duplicate))
+        item = jobs.get_job(response.get_json()["job_id"])["items"][0]
+        self.assertEqual(item["status"], "skipped")
+        self.assertEqual(item["message"], "已加入选品中心")
         self.assertEqual(db.get_product(self.product_id)["title"], "阶段二商品")
         self.assertEqual(db.snapshot_count(self.product_id), 1)
 

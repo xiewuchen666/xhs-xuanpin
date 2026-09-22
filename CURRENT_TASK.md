@@ -15,6 +15,7 @@
 - 商品详情识别及“加入监控 / 加入选品中心”快捷操作。
 - 应用 Logo、单实例保护、关闭到托盘、托盘打开与退出。
 - 真实桌面验收：冷启动、手机画面隐藏恢复、小红书关闭重启、三页面、趋势、设置、CSV/XLSX 导出、搜索分页排序、手动采集和商品状态恢复。
+- 全局采集优化：单 Chrome 4 页面并发、资源拦截、02:00–23:00 整点调度、23:55 独占优先级、固定日界基线和趋势缺采/异常区分。
 
 ## 当前目标
 
@@ -34,9 +35,10 @@
 
 - `dotnet build XhsXuanpin.sln --configuration Debug --no-restore`：0 警告，0 错误。
 - `dotnet build XhsXuanpin.sln --configuration Release --no-restore`：0 警告，0 错误。
-- `.venv\\Scripts\\python.exe -m unittest discover -s backend/tests -p "test_*.py" -v`：52 项通过。
+- `.venv\\Scripts\\python.exe -m unittest discover -s backend/tests -p "test_*.py"`：57 项通过。
 - `node --check web\\app.js`：通过。
-- 真实手动采集任务 `#86` 成功并写入新快照。
+- 真实全局采集任务 `#133`：55/55 成功，22 秒完成，恰好写入 55 条商品快照。
+- 实际运行时下一次普通采集为整点 `09:00:00`，午夜基线为 `23:55:00`；Worker 与调度器正常。
 - 工作区改动审计完成；已修复页面采集按钮、翻页详情联动、趋势缓存和 Android 状态点问题。
 
 ## 待完成

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -164,11 +165,11 @@ def parse_detail_response(
         return None
 
 
-def _collect_shop_details(page, shop_id: str) -> dict[str, Any]:
+async def _collect_shop_details(page, shop_id: str) -> dict[str, Any]:
     if not shop_id:
         return {}
     try:
-        payload = page.evaluate("""
+        payload = await page.evaluate("""
             async (shopId) => {
               const response = await fetch(`/api/store/vs/${shopId}/details`, {
                 credentials: 'include', signal: AbortSignal.timeout(8000)
@@ -191,81 +192,146 @@ def _collect_shop_details(page, shop_id: str) -> dict[str, Any]:
         return {}
 
 
-def collect_product(url: str, timeout_ms: int = 30000) -> dict[str, Any]:
-    url = validate_url(url)
+async def _collect_page(context, key: int, url: str, timeout_ms: int) -> tuple[int, dict[str, Any] | Exception]:
+    page = await context.new_page()
+    captured: dict[str, Any] = {}
+    captured_event = asyncio.Event()
+    last_status = None
+    detail_seen = False
+    parse_reason = ""
+
+    async def on_response(response):
+        nonlocal detail_seen, last_status, parse_reason
+        try:
+            validate_url(response.url)
+        except ValueError:
+            return
+        if DETAIL_API not in response.url or "/variant" in response.url:
+            return
+        detail_seen = True
+        last_status = response.status
+        if response.status != 200:
+            return
+        diagnostics: dict[str, str] = {}
+        try:
+            body = await response.json()
+        except Exception as exc:
+            parse_reason = "响应 JSON 解析失败：" + type(exc).__name__
+            return
+        parsed = parse_detail_response(body, page.url, diagnostics)
+        if parsed:
+            parsed["observed_at"] = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+            captured.update(parsed)
+            captured_event.set()
+        else:
+            parse_reason = diagnostics.get("reason", "详情响应无法解析")
+
+    page.on("response", on_response)
     try:
-        from playwright.sync_api import sync_playwright
+        await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        try:
+            await asyncio.wait_for(captured_event.wait(), timeout=12)
+        except TimeoutError:
+            pass
+        if not captured:
+            try:
+                text = await page.locator("body").inner_text(timeout=2000)
+            except Exception:
+                text = ""
+            if any(word in text for word in ("验证码", "安全验证", "异常访问", "请完成验证")):
+                raise RuntimeError("小红书要求人工安全验证，后台采集已停止，未尝试绕过验证")
+            logger.warning(
+                "Product detail capture failed: detail_seen=%s status=%s parse_reason=%s",
+                detail_seen,
+                last_status,
+                parse_reason or ("未收到目标详情接口响应" if not detail_seen else "无"),
+            )
+            if last_status and last_status != 200:
+                raise RuntimeError(f"商品详情接口返回 HTTP {last_status}")
+            raise RuntimeError("未捕获到商品详情数据，可能是链接失效、网络波动或页面接口发生变化")
+        captured.update(await _collect_shop_details(page, str(captured.get("shop_id") or "")))
+        return key, dict(captured)
+    except Exception as exc:
+        return key, exc
+    finally:
+        await page.close()
+
+
+async def _collect_products_async(
+    requests: list[tuple[int, str]],
+    timeout_ms: int,
+    max_pages: int,
+    should_continue,
+) -> dict[int, dict[str, Any] | Exception]:
+    from playwright.async_api import async_playwright
+
+    results: dict[int, dict[str, Any] | Exception] = {}
+    async with async_playwright() as playwright:
+        context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=str(PROFILE_DIR),
+            channel="chrome",
+            headless=True,
+            locale="zh-CN",
+            viewport={"width": 1365, "height": 900},
+        )
+        try:
+            async def route_request(route):
+                request = route.request
+                if request.is_navigation_request():
+                    try:
+                        validate_url(request.url)
+                    except ValueError:
+                        await route.abort()
+                        return
+                if request.resource_type in {"image", "media", "font"}:
+                    await route.abort()
+                    return
+                await route.continue_()
+
+            await context.route("**/*", route_request)
+            for page in list(context.pages):
+                await page.close()
+            for offset in range(0, len(requests), max_pages):
+                if should_continue is not None and not should_continue():
+                    break
+                wave = requests[offset:offset + max_pages]
+                completed = await asyncio.gather(
+                    *(_collect_page(context, key, url, timeout_ms) for key, url in wave)
+                )
+                results.update(completed)
+                if any(
+                    isinstance(value, Exception)
+                    and any(term in str(value) for term in ("人工安全验证", "验证码", "安全验证", "异常访问", "请完成验证"))
+                    for value in results.values()
+                ):
+                    break
+        finally:
+            await context.close()
+    return results
+
+
+def collect_products(
+    requests: list[tuple[int, str]],
+    timeout_ms: int = 30000,
+    max_pages: int = 4,
+    should_continue=None,
+) -> dict[int, dict[str, Any] | Exception]:
+    if not requests:
+        return {}
+    validated = [(int(key), validate_url(url)) for key, url in requests]
+    try:
+        import playwright.async_api  # noqa: F401
     except ImportError as exc:
         raise RuntimeError("Playwright 尚未安装") from exc
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     with COLLECT_LOCK:
-        captured: dict[str, Any] = {}
-        last_status = None
-        detail_seen = False
-        parse_reason = ""
-        with sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(PROFILE_DIR), channel="chrome", headless=True,
-                locale="zh-CN", viewport={"width": 1365, "height": 900})
-            try:
-                page = context.pages[0] if context.pages else context.new_page()
+        return asyncio.run(
+            _collect_products_async(validated, timeout_ms, max(1, max_pages), should_continue)
+        )
 
-                def guard_navigation(route):
-                    if route.request.is_navigation_request():
-                        try:
-                            validate_url(route.request.url)
-                        except ValueError:
-                            route.abort()
-                            return
-                    route.continue_()
 
-                def on_response(response):
-                    nonlocal detail_seen, last_status, parse_reason
-                    try:
-                        validate_url(response.url)
-                    except ValueError:
-                        return
-                    if DETAIL_API in response.url and "/variant" not in response.url:
-                        detail_seen = True
-                        last_status = response.status
-                        if response.status == 200:
-                            diagnostics: dict[str, str] = {}
-                            try:
-                                body = response.json()
-                            except Exception as exc:
-                                parse_reason = "响应 JSON 解析失败：" + type(exc).__name__
-                                return
-                            parsed = parse_detail_response(body, page.url, diagnostics)
-                            if parsed:
-                                parsed["observed_at"] = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-                                captured.update(parsed)
-                            else:
-                                parse_reason = diagnostics.get("reason", "详情响应无法解析")
-
-                page.route("**/*", guard_navigation)
-                page.on("response", on_response)
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                for _ in range(24):
-                    if captured:
-                        break
-                    page.wait_for_timeout(500)
-                if not captured:
-                    try:
-                        text = page.locator("body").inner_text(timeout=2000)
-                    except Exception:
-                        text = ""
-                    if any(word in text for word in ("验证码", "安全验证", "异常访问", "请完成验证")):
-                        raise RuntimeError("小红书要求人工安全验证，后台采集已停止，未尝试绕过验证")
-                    logger.warning(
-                        "Product detail capture failed: detail_seen=%s status=%s parse_reason=%s",
-                        detail_seen,
-                        last_status,
-                        parse_reason or ("未收到目标详情接口响应" if not detail_seen else "无"),
-                    )
-                    if last_status and last_status != 200:
-                        raise RuntimeError(f"商品详情接口返回 HTTP {last_status}")
-                    raise RuntimeError("未捕获到商品详情数据，可能是链接失效、网络波动或页面接口发生变化")
-                captured.update(_collect_shop_details(page, str(captured.get("shop_id") or "")))
-                return dict(captured)
-            finally:
-                context.close()
+def collect_product(url: str, timeout_ms: int = 30000) -> dict[str, Any]:
+    result = collect_products([(0, url)], timeout_ms=timeout_ms, max_pages=1)[0]
+    if isinstance(result, Exception):
+        raise result
+    return result

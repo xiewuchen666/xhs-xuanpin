@@ -93,6 +93,15 @@ def resolve_counter_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for row in resolved:
         if not exact_counter(row):
             continue
+        if row.get("baseline_slot") == "2355":
+            if pending is not None:
+                pending["_counter_state"] = "ignored_drop"
+                pending["_counter_segment"] = segment
+            row["_counter_state"] = "stable"
+            row["_counter_segment"] = segment
+            stable = row
+            pending = None
+            continue
         action = actions.get(id(row))
         if action == "ignore":
             row["_counter_state"] = "ignored_drop"
@@ -207,6 +216,26 @@ def nearest(rows: List[Dict[str, Any]], target: datetime, tolerance_minutes: int
     return min(candidates, key=lambda r: (abs((r["_time"] - target).total_seconds()), r["_time"], r.get("id", 0))) if candidates else None
 
 
+def day_baseline(
+    rows: List[Dict[str, Any]],
+    target: datetime,
+    tolerance_minutes: int,
+    upper: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    tagged = [
+        row
+        for row in rows
+        if exact_counter(row)
+        and row.get("baseline_slot") == "2355"
+        and row.get("baseline_day") == target.date().isoformat()
+        and (upper is None or row["_time"] <= upper)
+    ]
+    if tagged:
+        expected = target - timedelta(minutes=5)
+        return min(tagged, key=lambda row: (abs((row["_time"] - expected).total_seconds()), row.get("id", 0)))
+    return nearest(rows, target, tolerance_minutes, upper)
+
+
 def boundary_metric(
     rows: List[Dict[str, Any]],
     effective: List[Dict[str, Any]],
@@ -214,7 +243,7 @@ def boundary_metric(
     end: Optional[Dict[str, Any]],
     tolerance: int,
 ) -> Dict[str, Any]:
-    base = nearest(effective, target, tolerance, end["_time"] if end else None)
+    base = day_baseline(effective, target, tolerance, end["_time"] if end else None)
     if not base:
         return missing("缺少日界附近的已确认采样（容差 %s 分钟）" % tolerance)
     if not end or end["_time"] < target:
@@ -324,8 +353,8 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
         joined_today = joined_metric(rows, effective, latest)
         if joined_today["value"] is not None:
             today = joined_today
-    y_start = nearest(effective, midnight - timedelta(days=1), day_tolerance, current)
-    y_end = nearest(effective, midnight, day_tolerance, current)
+    y_start = day_baseline(effective, midnight - timedelta(days=1), day_tolerance, current)
+    y_end = day_baseline(effective, midnight, day_tolerance, current)
     yesterday = (
         interval(
             y_start,
@@ -481,9 +510,9 @@ def sales_trend(
         end = (
             rows[-1]
             if day == current.date() and rows and rows[-1]["_time"] >= start
-            else nearest(effective, finish, day_tolerance, current)
+            else day_baseline(effective, finish, day_tolerance, current)
         )
-        base = nearest(effective, start, day_tolerance, current)
+        base = day_baseline(effective, start, day_tolerance, current)
         metric = interval(base, end, rows, bool(base and base["_time"] != start)) if base and end else missing("缺少日界附近的有效采样")
         joined = bool(rows and effective and rows[0] is effective[0] and start <= rows[0]["_time"] < finish)
         if metric["value"] is None and joined and end:
@@ -501,7 +530,8 @@ def sales_trend(
 
     cutoff = current - timedelta(hours=24)
     hourly = []
-    for point in chart_rows([snapshot for snapshot in source if not snapshot.get("is_midnight")]):
+    chart = chart_rows([snapshot for snapshot in source if not snapshot.get("is_midnight")])
+    for point in chart:
         point_time = timestamp(point["time"])
         if not point_time or point_time < cutoff or point_time > current:
             continue
@@ -511,12 +541,34 @@ def sales_trend(
             continue
         regular_interval = value is not None and hours is not None and 0.5 <= hours <= 1.5
         gap = value is not None and hours is not None and hours > 1.5
+        gap_kind = "anomaly" if point.get("anomaly") else None
         reason = point["reason"]
         if gap:
-            reason = "中间缺少连续采集（%.1f 小时）；区间共新增 %s，平均每小时 %.1f（仅区间平均）" % (
-                hours,
-                value,
-                value / hours,
+            start_time = timestamp(point.get("from_time"))
+            intermediate = [
+                candidate
+                for candidate in chart
+                if start_time
+                and (candidate_time := timestamp(candidate.get("time")))
+                and start_time < candidate_time < point_time
+            ]
+            anomalies = [candidate for candidate in intermediate if candidate.get("anomaly")]
+            if anomalies:
+                sequence = [start_time] + [timestamp(candidate["time"]) for candidate in intermediate] + [point_time]
+                true_missing = any(
+                    (right - left).total_seconds() > 1.5 * 3600
+                    for left, right in zip(sequence, sequence[1:])
+                )
+                gap_kind = "mixed" if true_missing else "anomaly"
+            else:
+                gap_kind = "missing"
+            label = {
+                "missing": "中间缺少连续采集",
+                "anomaly": "中间采样读数异常，已排除",
+                "mixed": "中间同时存在缺采和已排除的异常读数",
+            }[gap_kind]
+            reason = "%s（%.1f 小时）；区间共新增 %s，平均每小时 %.1f（仅区间平均）" % (
+                label, hours, value, value / hours,
             )
         hourly.append({
             **point,
@@ -524,6 +576,7 @@ def sales_trend(
             "value": value if regular_interval else None,
             "reason": reason,
             "gap": gap,
+            "gap_kind": gap_kind,
             "gap_total": value if gap else None,
             "average_hourly": round(value / hours, 2) if gap else None,
         })

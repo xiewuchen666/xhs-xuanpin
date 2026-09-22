@@ -87,7 +87,7 @@ class PhaseThreeTests(unittest.TestCase):
             },
         )
 
-    def test_scheduler_restart_keeps_anchor_and_immediately_catches_up_when_overdue(self):
+    def test_default_scheduler_uses_top_of_hour_and_catches_up_when_overdue(self):
         with closing(db.connect()) as conn, conn:
             conn.execute(
                 """
@@ -111,8 +111,10 @@ class PhaseThreeTests(unittest.TestCase):
             server.configure_scheduler(app)
         enqueue.assert_not_called()
         self.assertEqual(
-            scheduler.get_job("auto_collect").trigger.start_date,
-            datetime(2026, 9, 20, 8, 55, 17, tzinfo=metrics.TZ),
+            scheduler.get_job("auto_collect").trigger.get_next_fire_time(
+                None, datetime(2026, 9, 20, 8, 34, tzinfo=metrics.TZ)
+            ),
+            datetime(2026, 9, 20, 9, 0, tzinfo=metrics.TZ),
         )
 
         overdue_scheduler = BackgroundScheduler(timezone=metrics.TZ)
@@ -124,8 +126,26 @@ class PhaseThreeTests(unittest.TestCase):
             server.configure_scheduler(app)
         enqueue.assert_called_once_with("all", baseline_slot=None)
         self.assertEqual(
-            overdue_scheduler.get_job("auto_collect").trigger.start_date,
-            datetime(2026, 9, 20, 10, 10, tzinfo=metrics.TZ),
+            overdue_scheduler.get_job("auto_collect").trigger.get_next_fire_time(
+                None, datetime(2026, 9, 20, 9, 10, tzinfo=metrics.TZ)
+            ),
+            datetime(2026, 9, 20, 10, 0, tzinfo=metrics.TZ),
+        )
+
+    def test_default_scheduler_skips_midnight_and_one_am(self):
+        app = server.create_app(testing=True)
+        scheduler = BackgroundScheduler(timezone=metrics.TZ)
+        app.extensions["collection_scheduler"] = scheduler
+        current = datetime(2026, 9, 20, 0, 30, tzinfo=metrics.TZ)
+        with (
+            mock.patch("server.metrics.now", return_value=current),
+            mock.patch("server.jobs.enqueue") as enqueue,
+        ):
+            server.configure_scheduler(app)
+        enqueue.assert_not_called()
+        self.assertEqual(
+            scheduler.get_job("auto_collect").trigger.get_next_fire_time(None, current),
+            datetime(2026, 9, 20, 2, 0, tzinfo=metrics.TZ),
         )
 
     def test_all_scope_is_deduped_union_and_excludes_paused(self):
@@ -148,6 +168,36 @@ class PhaseThreeTests(unittest.TestCase):
         self.assertEqual(jobs.get_job(first)["baseline_slot"], "2355")
         with self.assertRaisesRegex(ValueError, "无效午夜基线采样时点"):
             jobs.enqueue("all", baseline_slot="0000")
+
+    def test_midnight_job_runs_before_earlier_ordinary_job(self):
+        product_id = self.add_single("priority")
+        ordinary = jobs.enqueue("all", product_ids=[product_id])
+        midnight = jobs.enqueue("all", product_ids=[product_id], baseline_slot="2355")
+
+        self.assertTrue(jobs.process_next(lambda _url: payload("priority", "2026-09-18 23:55:01", 120)))
+
+        self.assertEqual(jobs.get_job(midnight)["status"], "success")
+        self.assertEqual(jobs.get_job(ordinary)["status"], "queued")
+
+    def test_default_worker_uses_four_page_batch_and_serial_persistence(self):
+        first = self.add_single("batch-a")
+        second = self.add_selection_only("batch-b")
+        job_id = jobs.enqueue("all")
+
+        def fake_batch(requests, *, max_pages, should_continue):
+            self.assertEqual(max_pages, 4)
+            self.assertTrue(should_continue())
+            return {
+                key: payload("batch-a" if key == requests[0][0] else "batch-b", "2026-09-18 11:00:00", 130)
+                for key, _url in requests
+            }
+
+        with mock.patch.object(jobs.collector_module, "collect_products", side_effect=fake_batch):
+            self.assertTrue(jobs.process_next())
+
+        self.assertEqual(jobs.get_job(job_id)["status"], "success")
+        self.assertEqual(db.snapshot_count(first), 2)
+        self.assertEqual(db.snapshot_count(second), 2)
 
     def test_queued_item_is_rechecked_and_skipped_after_pause(self):
         product_id = self.add_single("pause-after-queue")
