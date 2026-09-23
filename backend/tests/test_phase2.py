@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
@@ -70,6 +71,26 @@ class PhaseTwoDatabaseTests(unittest.TestCase):
 
         detail = db.list_shop_products(shops[0]["shop_key"], as_of="2026-09-18 10:00:00")
         self.assertEqual({row["id"] for row in detail}, {a, b})
+
+    def test_shop_logo_is_kept_when_later_collection_has_no_logo(self):
+        first = payload("logo-item", "商品", "2026-09-18 10:00:00", shop_id="shop-logo", shop_name="Logo店")
+        first["shop_logo_url"] = "https://img.example.com/shop.png"
+        product_id = db.persist("https://xiaohongshu.com/goods-detail/logo-item", first, join_shop=True)
+        self.assertEqual(db.list_shops()[0]["logo_url"], first["shop_logo_url"])
+
+        later = payload("logo-item", "商品", "2026-09-18 11:00:00", shop_id="shop-logo", shop_name="Logo店")
+        db.persist("https://xiaohongshu.com/goods-detail/logo-item", later, join_single=False, expected_product_id=product_id)
+        self.assertEqual(db.list_shops()[0]["logo_url"], first["shop_logo_url"])
+
+    def test_existing_shop_database_adds_logo_column_without_losing_shops(self):
+        product_id = self.add_product("old-shop-item", "old-shop", "原有店铺")
+        db.add_shop_monitor(product_id)
+        with closing(db.connect()) as conn, conn:
+            conn.execute("ALTER TABLE shops DROP COLUMN logo_url")
+        db.init_db()
+        shops = db.list_shops()
+        self.assertEqual(shops[0]["shop_name"], "原有店铺")
+        self.assertIsNone(shops[0]["logo_url"])
 
     def test_shop_metric_aggregation_uses_product_metrics(self):
         a = db.persist(

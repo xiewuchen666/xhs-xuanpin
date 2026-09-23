@@ -79,6 +79,7 @@ def init_db() -> None:
               name TEXT NOT NULL,
               display_name TEXT,
               rating TEXT,
+              logo_url TEXT,
               brand_name TEXT,
               brand_fans_count INTEGER,
               brand_notes_count INTEGER,
@@ -111,6 +112,9 @@ def init_db() -> None:
         for name, declaration in product_additions.items():
             if name not in product_columns:
                 conn.execute(f"ALTER TABLE products ADD COLUMN {name} {declaration}")
+
+        if "logo_url" not in _columns(conn, "shops"):
+            conn.execute("ALTER TABLE shops ADD COLUMN logo_url TEXT")
 
         snapshot_columns = _columns(conn, "snapshots")
         snapshot_additions = {
@@ -299,6 +303,7 @@ def _shop_membership(conn: sqlite3.Connection, product_id: int, data: dict[str, 
         UPDATE shops
         SET display_name=?,
             rating=COALESCE(NULLIF(?,''),rating),
+            logo_url=COALESCE(NULLIF(?,''),logo_url),
             brand_name=COALESCE(NULLIF(?,''),brand_name),
             brand_fans_count=COALESCE(?,brand_fans_count),
             brand_notes_count=COALESCE(?,brand_notes_count),
@@ -310,6 +315,7 @@ def _shop_membership(conn: sqlite3.Connection, product_id: int, data: dict[str, 
         (
             shop_name,
             data.get("shop_score") or data.get("rating") or "",
+            data.get("shop_logo_url") or "",
             data.get("shop_brand_name") or "",
             data.get("shop_fans_count"),
             data.get("shop_notes_count"),
@@ -800,6 +806,7 @@ def list_shops(as_of=None) -> list[dict[str, Any]]:
             "shop_id": str(shop.get("platform_shop_id") or ""),
             "shop_name": str(shop.get("display_name") or shop.get("name") or "店铺未识别"),
             "rating": shop.get("rating"),
+            "logo_url": shop.get("logo_url"),
             "brand_name": shop.get("brand_name"),
             "brand_fans_count": shop.get("brand_fans_count"),
             "brand_notes_count": shop.get("brand_notes_count"),

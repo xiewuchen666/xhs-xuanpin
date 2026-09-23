@@ -1095,13 +1095,14 @@ function renderShopList() {
       const expanded = expandedShopKeys.has(shop.shop_key);
       const meta = [
         shop.rating ? '评分 ' + shop.rating : '',
-        shop.brand_name ? '品牌 ' + shop.brand_name : '',
-        shop.brand_fans_count != null ? '粉丝 ' + formatSales(shop.brand_fans_count) : '',
-        shop.brand_notes_count != null ? '笔记 ' + formatSales(shop.brand_notes_count) : ''
+        shop.brand_fans_count != null ? '粉丝 ' + formatSales(shop.brand_fans_count) : ''
       ].filter(Boolean).join(' · ');
+      const logo = shop.logo_url
+        ? '<img src="' + esc(shop.logo_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer">'
+        : '';
       return '<div class="shopcard">' +
         '<div class="shoprow" data-shop-toggle="' + esc(shop.shop_key) + '" aria-expanded="' + (expanded ? 'true' : 'false') + '">' +
-        '<div class="shopid"><div class="shoplogo">' + initial + '</div><div><b>' + esc(shop.shop_name) + '</b><span>' + shop.product_count + ' 个已监控商品</span>' +
+        '<div class="shopid"><div class="shoplogo">' + initial + logo + '</div><div><b>' + esc(shop.shop_name) + '</b>' +
         (meta ? '<small class="shop-meta-line">' + esc(meta) + '</small>' : '') + '</div></div>' +
         '<div class="shopmetric"><span>已监控</span><b>' + shop.product_count + ' 款</b></div>' +
         '<div class="shopmetric"><span>今日新增汇总</span>' + shopMetric(shop.today) + '</div>' +
@@ -1113,6 +1114,9 @@ function renderShopList() {
         (expanded ? shopExpandedTable(shop) : '') +
         '</div>';
     }).join('') + '</div>' + renderShopPager(shops.length);
+    content.querySelectorAll('.shoplogo img').forEach(img => {
+      img.addEventListener('error', () => img.remove());
+    });
   }
 
   document.querySelector('#shopPageSize')?.addEventListener('change', event => {

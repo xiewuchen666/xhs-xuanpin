@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import logging
 import os
 import re
@@ -119,6 +120,34 @@ def _pick_main_image(data: dict[str, Any]) -> str:
     return "https:" + url if url.startswith("//") else url
 
 
+def _pick_shop_logo(*sources: dict[str, Any]) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("logo", "logo_url", "logoUrl", "avatar", "avatar_url", "avatarUrl"):
+            value = source.get(key)
+            if isinstance(value, dict):
+                value = next((value.get(name) for name in ("url", "url_default", "imageUrl", "image_url") if value.get(name)), "")
+            url = str(value or "").strip()
+            if url.startswith("//"):
+                url = "https:" + url
+            try:
+                parts = urlsplit(url)
+                if len(url) > 2048 or parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+                    continue
+                host = parts.hostname.lower()
+                try:
+                    if not ipaddress.ip_address(host).is_global:
+                        continue
+                except ValueError:
+                    if "." not in host or host == "localhost" or host.endswith(".localhost"):
+                        continue
+                return url
+            except ValueError:
+                continue
+    return ""
+
+
 def parse_detail_response(
     body: dict[str, Any],
     page_url: str = "",
@@ -154,6 +183,7 @@ def parse_detail_response(
             "title": str(desc.get("name") or "").strip(),
             "shop_id": str(seller.get("id") or "").strip(),
             "shop_name": str(seller.get("name") or "").strip(),
+            "shop_logo_url": _pick_shop_logo(seller),
             "fans_count": fans_count,
             "rating": seller.get("sellerScore") or seller.get("score") or "",
             "image_url": _pick_main_image(data),
@@ -195,6 +225,7 @@ async def _collect_shop_details(page, shop_id: str) -> dict[str, Any]:
         brand, popup = data.get("brand") or {}, data.get("popup_shop_info") or {}
         return {
             "shop_score": data.get("shop_score") or data.get("grade") or "",
+            "shop_logo_url": _pick_shop_logo(data.get("shop") or {}, popup, brand, data.get("user_info") or {}, data),
             "shop_brand_name": str(brand.get("name") or "").strip(),
             "shop_fans_count": brand.get("fans_num"),
             "shop_notes_count": brand.get("notes_num"),
@@ -272,7 +303,10 @@ async def _collect_page(context, key: int, url: str, timeout_ms: int) -> tuple[i
                     raise ProductTerminalError("invalid_link", f"商品详情接口返回 HTTP {last_status}，链接已失效")
                 raise RuntimeError(f"商品详情接口返回 HTTP {last_status}")
             raise RuntimeError("未捕获到商品详情数据，可能是链接失效、网络波动或页面接口发生变化")
-        captured.update(await _collect_shop_details(page, str(captured.get("shop_id") or "")))
+        shop_details = await _collect_shop_details(page, str(captured.get("shop_id") or ""))
+        if not shop_details.get("shop_logo_url"):
+            shop_details.pop("shop_logo_url", None)
+        captured.update(shop_details)
         return key, dict(captured)
     except Exception as exc:
         return key, exc

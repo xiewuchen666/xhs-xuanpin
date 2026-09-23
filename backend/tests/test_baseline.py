@@ -21,11 +21,14 @@ class CollectorParserTests(unittest.TestCase):
     def test_detail_parser(self):
         body = {"data": {"template_data": [{
             "descriptionH5": {"skuId": "sku-1", "name": "测试商品"},
-            "sellerH5": {"id": "shop-1", "name": "测试店铺"},
+            "sellerH5": {"id": "shop-1", "name": "测试店铺", "logo": {"url": "//img.example.com/shop.png"}},
             "priceH5": {"dealPrice": {"price": "24.90"}, "itemAnalysisDataText": "已售100"}
         }]}}
         result = collector.parse_detail_response(body)
         self.assertEqual((result["item_id"], result["price"], result["total_sales"]), ("sku-1", 24.9, 100))
+        self.assertEqual(result["shop_logo_url"], "https://img.example.com/shop.png")
+        self.assertEqual(collector._pick_shop_logo({"logo": "javascript:alert(1)"}), "")
+        self.assertEqual(collector._pick_shop_logo({"logo": "https://127.0.0.1/logo.png"}), "")
 
         diagnostics = {}
         self.assertIsNone(collector.parse_detail_response({}, diagnostics=diagnostics))

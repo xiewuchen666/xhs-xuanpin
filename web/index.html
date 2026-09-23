@@ -784,7 +784,11 @@
     .shoprow > * { text-align: center; }
     .shoprow:hover { background: #FAFBFD; }
     .shopid { display: flex; gap: 10px; align-items: center; text-align: left; }
-    .shoplogo { width: 36px; height: 36px; border-radius: 50%; background: var(--red-soft); color: var(--red); display: grid; place-items: center; font-weight: 600; flex: none; }
+    .shopid > div:last-child { min-width: 0; }
+    .shopid b, .shop-meta-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .shop-meta-line { margin-top: 3px; color: var(--ink3); font-size: 11px; }
+    .shoplogo { position: relative; overflow: hidden; width: 36px; height: 36px; border-radius: 50%; background: var(--red-soft); color: var(--red); display: grid; place-items: center; font-weight: 600; flex: none; }
+    .shoplogo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
     .shopmetric span { display: block; color: var(--ink3); font-size: 11px; }
     .shopmetric b { display: block; font-size: 14px; font-weight: 600; margin-top: 2px; }
     .shopmetric b.positive { color: var(--red); }
@@ -906,6 +910,6 @@
       <div class="trend-note" id="trendNote"></div>
     </section>
   </div>
-  <script src="/app.js?v=2.3.8"></script>
+  <script src="/app.js?v=2.3.9"></script>
 </body>
 </html>
