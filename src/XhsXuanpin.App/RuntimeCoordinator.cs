@@ -4,17 +4,20 @@ using System.IO;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Win32;
 
 namespace XhsXuanpin.App;
 
 internal sealed class RuntimeCoordinator : IDisposable
 {
-    private const string Serial = "emulator-5554";
+    private string Serial { get; set; } = "emulator-5554";
     private const string WindowTitle = "XhsXuanpinPhone";
     private const int TargetAndroidDensity = 480;
     private readonly string _root = FindProjectRoot();
-    private readonly string _adb = @"D:\Program Files\Netease\MuMu\nx_main\adb.exe";
+    private readonly string _mumuDirectory = FindMuMuDirectory();
+    private string Adb => Path.Combine(_mumuDirectory, "nx_main", "adb.exe");
     private Process? _python;
     private Process? _scrcpy;
     private IntPtr _scrcpyWindow;
@@ -28,6 +31,7 @@ internal sealed class RuntimeCoordinator : IDisposable
     private readonly SemaphoreSlim _scrcpyLifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _androidInputLock = new(1, 1);
     private DateTime _lastScrcpyRecoveryAttemptUtc;
+    private DateTime _lastAdbConnectAttemptUtc;
 
     public async Task StartBackendAsync()
     {
@@ -51,7 +55,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         try
         {
             await EnsureAndroidAsync();
-            _androidUi = new AndroidUi(_adb, Serial);
+            _androidUi = new AndroidUi(Adb, Serial);
             await EnsureScrcpyAsync();
             _androidStarted = true;
             AppLogger.Info("Runtime", "Android initialization completed");
@@ -82,7 +86,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         await _androidInputLock.WaitAsync();
         try
         {
-            await RunAsync(_adb, "-s", Serial, "shell", "input", "text", text.Replace(" ", "%s"));
+            await RunAsync(Adb, "-s", Serial, "shell", "input", "text", text.Replace(" ", "%s"));
         }
         finally
         {
@@ -96,7 +100,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         await _androidInputLock.WaitAsync();
         try
         {
-            await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", keyCode);
+            await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", keyCode);
         }
         finally
         {
@@ -106,7 +110,9 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     public async Task<bool> EnsureHealthyAsync(bool phoneVisible)
     {
-        if (!_androidStarted || _scrcpySuspended || IsScrcpyHealthy()) return false;
+        if (!_androidStarted) return false;
+        HideMuMuWindows();
+        if (_scrcpySuspended || IsScrcpyHealthy()) return false;
         if (!await _scrcpyLifecycleLock.WaitAsync(0)) return false;
 
         try
@@ -119,7 +125,7 @@ internal sealed class RuntimeCoordinator : IDisposable
             ResetScrcpyState(terminateRunningProcess: true);
             if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
 
-            await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
+            await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
             await EnsureScrcpyAsync();
             SetPhoneVisible(phoneVisible);
             AppLogger.Info("Runtime", "scrcpy recovery completed");
@@ -161,7 +167,9 @@ internal sealed class RuntimeCoordinator : IDisposable
             return;
         }
 
-        var python = Path.Combine(_root, ".venv", "Scripts", "python.exe");
+        var python = File.Exists(Path.Combine(_root, "installed.marker"))
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "XhsXuanpin", "python-env", "Scripts", "python.exe")
+            : Path.Combine(_root, ".venv", "Scripts", "python.exe");
         var server = Path.Combine(_root, "backend", "server.py");
         if (!File.Exists(python)) throw new InvalidOperationException("未找到项目 Python 3.12 虚拟环境");
 
@@ -214,16 +222,16 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     private async Task EnsureAndroidAsync()
     {
-        if (!File.Exists(_adb)) throw new InvalidOperationException("未找到 MuMu ADB");
+        if (!File.Exists(Adb)) throw new InvalidOperationException("未找到 MuMu ADB");
         if (!await AdbReadyAsync())
         {
             AppLogger.Warning("Runtime", "Android ADB is not ready; launching MuMu player");
-            var manager = @"D:\Program Files\Netease\MuMu\nx_main\MuMuManager.exe";
+            var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
             Process.Start(new ProcessStartInfo(manager, "api launch_player 0") { UseShellExecute = false, CreateNoWindow = true });
             for (var i = 0; i < 120 && !await AdbReadyAsync(); i++) await Task.Delay(1000);
         }
         if (!await AdbReadyAsync()) throw new InvalidOperationException("MuMu Android 未在 120 秒内连接");
-        await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
+        await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
         await EnsureReadableDensityAsync();
     }
 
@@ -233,7 +241,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         try
         {
             var output = await RunAsync(
-                _adb, "-s", Serial, "shell", "dumpsys", "activity", "processes", "com.xingin.xhs");
+                Adb, "-s", Serial, "shell", "dumpsys", "activity", "processes", "com.xingin.xhs");
             return output.Contains(":com.xingin.xhs/", StringComparison.Ordinal);
         }
         catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
@@ -248,7 +256,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         try
         {
             var output = await RunAsync(
-                _adb, "-s", Serial, "shell", "dumpsys", "activity", "activities", "com.xingin.xhs");
+                Adb, "-s", Serial, "shell", "dumpsys", "activity", "activities", "com.xingin.xhs");
             return output
                 .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                 .Any(line =>
@@ -360,7 +368,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         {
             if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
             AppLogger.Info("Runtime", "Stopping Xiaohongshu app and suspending phone stream");
-            await RunAsync(_adb, "-s", Serial, "shell", "am", "force-stop", "com.xingin.xhs");
+            await RunAsync(Adb, "-s", Serial, "shell", "am", "force-stop", "com.xingin.xhs");
             for (var i = 0; i < 20; i++)
             {
                 if (!await IsXhsRunningAsync())
@@ -375,11 +383,12 @@ internal sealed class RuntimeCoordinator : IDisposable
         finally
         {
             ResetScrcpyState(terminateRunningProcess: true);
+            HideMuMuWindows();
             if (await AdbReadyAsync())
             {
                 try
                 {
-                    await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_SLEEP");
+                    await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_SLEEP");
                 }
                 catch (Exception ex)
                 {
@@ -396,16 +405,17 @@ internal sealed class RuntimeCoordinator : IDisposable
         await _scrcpyLifecycleLock.WaitAsync();
         try
         {
-            if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
+            await EnsureAndroidAsync();
             AppLogger.Info("Runtime", "Starting phone stream and Xiaohongshu app");
-            await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
+            await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
             await EnsureScrcpyAsync();
-            await RunAsync(_adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
+            await RunAsync(Adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
             for (var i = 0; i < 30; i++)
             {
                 if (await IsXhsRunningAsync())
                 {
                     _scrcpySuspended = false;
+                    HideMuMuWindows();
                     AppLogger.Info("Runtime", "Xiaohongshu app process and phone stream started");
                     return;
                 }
@@ -421,7 +431,7 @@ internal sealed class RuntimeCoordinator : IDisposable
             {
                 try
                 {
-                    await RunAsync(_adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_SLEEP");
+                    await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_SLEEP");
                 }
                 catch (Exception ex)
                 {
@@ -440,7 +450,7 @@ internal sealed class RuntimeCoordinator : IDisposable
     {
         try
         {
-            var density = await RunAsync(_adb, "-s", Serial, "shell", "wm", "density");
+            var density = await RunAsync(Adb, "-s", Serial, "shell", "wm", "density");
             var overrideMatch = Regex.Match(density, @"Override density:\s*(\d+)", RegexOptions.IgnoreCase);
             var physicalMatch = Regex.Match(density, @"Physical density:\s*(\d+)", RegexOptions.IgnoreCase);
             var effectiveDensity = overrideMatch.Success
@@ -449,7 +459,7 @@ internal sealed class RuntimeCoordinator : IDisposable
 
             if (effectiveDensity < TargetAndroidDensity)
             {
-                await RunAsync(_adb, "-s", Serial, "shell", "wm", "density", TargetAndroidDensity.ToString());
+                await RunAsync(Adb, "-s", Serial, "shell", "wm", "density", TargetAndroidDensity.ToString());
                 await Task.Delay(800);
             }
         }
@@ -463,10 +473,37 @@ internal sealed class RuntimeCoordinator : IDisposable
     {
         try
         {
-            return (await RunAsync(_adb, "-s", Serial, "get-state")).Trim() == "device";
+            if ((await RunAsync(Adb, "-s", Serial, "get-state")).Trim() == "device") return true;
         }
         catch
         {
+        }
+
+        if (DateTime.UtcNow - _lastAdbConnectAttemptUtc < TimeSpan.FromSeconds(5)) return false;
+        _lastAdbConnectAttemptUtc = DateTime.UtcNow;
+        try
+        {
+            var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
+            using var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all"));
+            if (!info.RootElement.TryGetProperty("0", out var device) ||
+                !device.GetProperty("is_android_started").GetBoolean()) return false;
+            var host = device.GetProperty("adb_host_ip").GetString();
+            var port = device.GetProperty("adb_port").GetInt32();
+            if (host != "127.0.0.1" || port is < 1 or > 65535) return false;
+            var serial = $"{host}:{port}";
+            await RunAsync(Adb, "connect", serial);
+            if ((await RunAsync(Adb, "-s", serial, "get-state")).Trim() != "device") return false;
+            if (Serial != serial)
+            {
+                Serial = serial;
+                if (_androidUi is not null) _androidUi = new AndroidUi(Adb, serial);
+            }
+            AppLogger.Info("Runtime", $"MuMu ADB connected; serial={Serial}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warning("Runtime", $"MuMu ADB connection pending: {ex.Message}");
             return false;
         }
     }
@@ -484,7 +521,8 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (_scrcpy is not null || _scrcpyWindow != IntPtr.Zero)
             ResetScrcpyState(terminateRunningProcess: true);
 
-        var path = @"D:\Programs\scrcpy\scrcpy.exe";
+        var bundled = Path.Combine(_root, "scrcpy", "scrcpy.exe");
+        var path = File.Exists(bundled) ? bundled : @"D:\Programs\scrcpy\scrcpy.exe";
         if (!File.Exists(path)) throw new InvalidOperationException("未找到 scrcpy");
 
         var startInfo = new ProcessStartInfo(path)
@@ -598,7 +636,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         try
         {
             if (terminateRunningProcess && ownsProcess && !process.HasExited)
-                process.Kill(true);
+                process.Kill();
         }
         catch (InvalidOperationException)
         {
@@ -730,6 +768,59 @@ internal sealed class RuntimeCoordinator : IDisposable
             if (File.Exists(Path.Combine(directory.FullName, "backend", "server.py")))
                 return directory.FullName;
         throw new InvalidOperationException("未找到项目根目录");
+    }
+
+    private static string FindMuMuDirectory()
+    {
+        foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
+        foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(hive, view);
+            using var uninstall = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall");
+            if (uninstall is null) continue;
+            foreach (var name in uninstall.GetSubKeyNames())
+            {
+                using var entry = uninstall.OpenSubKey(name);
+                if (entry?.GetValue("DisplayName")?.ToString()?.Contains("MuMu", StringComparison.OrdinalIgnoreCase) != true) continue;
+                foreach (var valueName in new[] { "InstallLocation", "UninstallString", "DisplayIcon" })
+                {
+                    var value = entry.GetValue(valueName)?.ToString()?.Trim();
+                    if (string.IsNullOrEmpty(value)) continue;
+                    var candidate = value;
+                    if (value.StartsWith('"'))
+                    {
+                        var end = value.IndexOf('"', 1);
+                        if (end < 0) continue;
+                        candidate = value[1..end];
+                    }
+                    else
+                    {
+                        var file = Regex.Match(value, @"^.+?\.(?:exe|ico)", RegexOptions.IgnoreCase);
+                        if (file.Success) candidate = file.Value;
+                    }
+                    if (File.Exists(candidate)) candidate = Path.GetDirectoryName(candidate)!;
+                    for (var i = 0; i < 3 && !string.IsNullOrEmpty(candidate); i++, candidate = Path.GetDirectoryName(candidate)!)
+                        if (File.Exists(Path.Combine(candidate, "nx_main", "adb.exe")) &&
+                            File.Exists(Path.Combine(candidate, "nx_main", "MuMuManager.exe")))
+                            return candidate;
+                }
+            }
+        }
+        foreach (var processName in new[] { "MuMuNxMain", "MuMuNxDevice", "MuMuManager" })
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            using (process)
+            {
+                string? candidate;
+                try { candidate = Path.GetDirectoryName(process.MainModule?.FileName); }
+                catch { continue; }
+                for (var i = 0; i < 5 && !string.IsNullOrEmpty(candidate); i++, candidate = Path.GetDirectoryName(candidate))
+                    if (File.Exists(Path.Combine(candidate, "nx_main", "adb.exe")) &&
+                        File.Exists(Path.Combine(candidate, "nx_main", "MuMuManager.exe")))
+                        return candidate;
+            }
+        }
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Netease", "MuMu");
     }
 
     public void Dispose()

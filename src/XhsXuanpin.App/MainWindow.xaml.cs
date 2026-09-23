@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.ComponentModel;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
@@ -58,6 +59,24 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        var workArea = SystemParameters.WorkArea;
+        MinWidth = Math.Min(MinWidth, workArea.Width);
+        MinHeight = Math.Min(MinHeight, workArea.Height);
+        Width = Math.Min(Width, workArea.Width);
+        Height = Math.Min(Height, workArea.Height);
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = workArea.Left + (workArea.Width - Width) / 2;
+        Top = workArea.Top + (workArea.Height - Height) / 2;
+        if (workArea.Width < 1180)
+        {
+            _phoneVisible = false;
+            PhoneColumn.MinWidth = 0;
+            PhoneColumn.Width = new GridLength(0);
+            PhoneSplitter.IsEnabled = false;
+            PhoneToggleLabel.Text = "›";
+            PhoneToggle.ToolTip = "展开手机预览";
+        }
+        UpdateCompactHeader();
         _trayIcon = CreateTrayIcon();
         PhoneHost.Child = _phonePanel;
         _phonePanel.Resize += (_, _) =>
@@ -70,6 +89,7 @@ public partial class MainWindow : Window
         };
         SizeChanged += (_, _) =>
         {
+            UpdateCompactHeader();
             if (!_windowSizing) FitPhoneSurface();
         };
         StateChanged += (_, _) => UpdateWindowStateButton();
@@ -166,7 +186,12 @@ public partial class MainWindow : Window
         {
             await _runtime.StartBackendAsync();
             SetBackendHealthy();
-            await Workspace.EnsureCoreWebView2Async();
+            var webviewData = Environment.GetEnvironmentVariable("XHS_XUANPIN_DATA_DIR");
+            var webviewEnvironment = File.Exists(Path.Combine(AppContext.BaseDirectory, "installed.marker"))
+                ? await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(
+                    userDataFolder: Path.Combine(webviewData!, "webview2"))
+                : null;
+            await Workspace.EnsureCoreWebView2Async(webviewEnvironment);
             Workspace.CoreWebView2.NewWindowRequested += Workspace_NewWindowRequested;
             Workspace.CoreWebView2.DownloadStarting += Workspace_DownloadStarting;
             Workspace.CoreWebView2.WebMessageReceived += Workspace_WebMessageReceived;
@@ -759,25 +784,44 @@ public partial class MainWindow : Window
             PhoneColumn.MinWidth = 0;
             PhoneColumn.Width = new GridLength(0);
             PhoneSplitter.IsEnabled = false;
-            GlobalTabsHost.Margin = new Thickness(300, 0, 0, 0);
         }
         else
         {
             _phoneVisible = true;
-            PhoneColumn.MinWidth = 400;
+            PhoneColumn.MinWidth = 260;
             PhoneColumn.MaxWidth = 680;
             PhoneColumn.Width = _expandedPhoneWidth;
             PhoneSplitter.IsEnabled = true;
-            GlobalTabsHost.Margin = new Thickness(0);
         }
 
         PhoneToggleLabel.Text = _phoneVisible ? "‹" : "›";
         PhoneToggle.ToolTip = _phoneVisible ? "收起手机预览" : "展开手机预览";
+        UpdateCompactHeader();
         Dispatcher.InvokeAsync(() =>
         {
             if (_phoneVisible) FitPhoneSurface();
             UpdatePhoneSurfaceMode(layoutChanged: true);
         }, DispatcherPriority.Loaded);
+    }
+
+    private void UpdateCompactHeader()
+    {
+        var width = ActualWidth > 0 ? ActualWidth : Width;
+        var compact = width < 1550;
+        ServiceStatusChip.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        CollectionIntervalChip.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        HeaderDivider.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        MessagesButton.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        CurrentTimeText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        GlobalCollectionToggleButton.Visibility = width < 900 ? Visibility.Collapsed : Visibility.Visible;
+        SettingsButton.Visibility = width < 820 ? Visibility.Collapsed : Visibility.Visible;
+        BrandTitle.Visibility = width < 820 ? Visibility.Collapsed : Visibility.Visible;
+        BrandVersion.Visibility = width < 820 ? Visibility.Collapsed : Visibility.Visible;
+        if (_phoneVisible)
+            PhoneColumn.MaxWidth = Math.Min(680, Math.Max(260,
+                width - (width < 820 ? 420 : width < 900 ? 480 : 550)));
+        GlobalTabsHost.Margin = _phoneVisible ? new Thickness(0) :
+            new Thickness(width < 820 ? 52 : 300, 0, 0, 0);
     }
 
     private void PhoneSplitter_DragCompleted(object sender, DragCompletedEventArgs e)

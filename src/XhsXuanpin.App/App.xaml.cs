@@ -1,4 +1,5 @@
 using System.Threading;
+using System.IO;
 using System.Windows;
 
 namespace XhsXuanpin.App;
@@ -18,6 +19,10 @@ public partial class App : System.Windows.Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (File.Exists(Path.Combine(AppContext.BaseDirectory, "installed.marker")))
+            Environment.SetEnvironmentVariable(
+                "XHS_XUANPIN_DATA_DIR",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "XhsXuanpin", "data"));
         DispatcherUnhandledException += (_, args) =>
         {
             AppLogger.Error("App", "Dispatcher unhandled exception", args.Exception);

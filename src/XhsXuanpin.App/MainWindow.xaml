@@ -5,7 +5,7 @@
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="小红书选品工作台" Icon="Assets/logo.ico"
-        Width="1662" Height="994" MinWidth="1180" MinHeight="720"
+        Width="1662" Height="994" MinWidth="800" MinHeight="500"
         WindowStyle="None" ResizeMode="CanResize"
         Background="White" FontFamily="Microsoft YaHei UI" WindowStartupLocation="CenterScreen"
         UseLayoutRounding="True" SnapsToDevicePixels="True">
@@ -235,9 +235,9 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition x:Name="PhoneColumn" Width="459" MinWidth="400" MaxWidth="680"/>
+            <ColumnDefinition x:Name="PhoneColumn" Width="459" MinWidth="260" MaxWidth="680"/>
             <ColumnDefinition Width="24"/>
-            <ColumnDefinition Width="*" MinWidth="720"/>
+            <ColumnDefinition Width="*" MinWidth="350"/>
         </Grid.ColumnDefinitions>
 
         <TextBox x:Name="PhoneKeyboardSink"
@@ -257,9 +257,9 @@
                     Orientation="Horizontal" VerticalAlignment="Center"
                     HorizontalAlignment="Left" Margin="16,0,0,0">
             <Image Width="28" Height="28" Source="Assets/logo.png" Stretch="Uniform"/>
-            <TextBlock Text="小红书选品工作台" FontSize="15" FontWeight="Bold" Foreground="#1F2329" Margin="10,0,0,0"
+            <TextBlock x:Name="BrandTitle" Text="小红书选品工作台" FontSize="15" FontWeight="Bold" Foreground="#1F2329" Margin="10,0,0,0"
                        VerticalAlignment="Center"/>
-            <TextBlock Text="v1.0.0" FontSize="12" Foreground="#86909C" Margin="10,2,0,0"
+            <TextBlock x:Name="BrandVersion" Text="v1.0.0" FontSize="12" Foreground="#86909C" Margin="10,2,0,0"
                        VerticalAlignment="Center"/>
         </StackPanel>
 
@@ -297,14 +297,14 @@
         <StackPanel Grid.Row="0" Grid.Column="2"
                     Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
             <!-- Discrete Live Service Indicator -->
-            <Border Height="26" Padding="8,0" Background="#F7F8FA" BorderBrush="#E5E6EB" BorderThickness="1" CornerRadius="13">
+            <Border x:Name="ServiceStatusChip" Height="26" Padding="8,0" Background="#F7F8FA" BorderBrush="#E5E6EB" BorderThickness="1" CornerRadius="13">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="GlobalServiceDot" Width="6" Height="6" Fill="#E89A19" Margin="0,0,5,0"/>
                     <TextBlock x:Name="GlobalServiceStatus" Text="采集服务启动中" FontSize="11" Foreground="#4E5969"
                                VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
-            <Border Height="26" Margin="6,0,0,0" Padding="8,0"
+            <Border x:Name="CollectionIntervalChip" Height="26" Margin="6,0,0,0" Padding="8,0"
                     Background="#F7F8FA" BorderBrush="#E5E6EB" BorderThickness="1" CornerRadius="13">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock x:Name="GlobalCollectionIntervalText" Text="全局采集 60 分钟" FontSize="11" Foreground="#4E5969"/>
@@ -318,7 +318,7 @@
                     ToolTip="暂停全局自动采集；不影响手动立即采集"/>
 
             <!-- Subtle Vertical Divider -->
-            <Rectangle Width="1" Height="14" Fill="#E5E6EB" Margin="10,0"/>
+            <Rectangle x:Name="HeaderDivider" Width="1" Height="14" Fill="#E5E6EB" Margin="10,0"/>
 
             <!-- Settings Button (from ui-reference.png) -->
             <Button x:Name="SettingsButton" Style="{StaticResource HeaderToolButtonStyle}" Click="SettingsButton_Click">
@@ -330,7 +330,7 @@
             </Button>
 
             <!-- Message / Notification Button (from ui-reference.png) -->
-            <Button Style="{StaticResource HeaderToolButtonStyle}" Margin="4,0,0,0">
+            <Button x:Name="MessagesButton" Style="{StaticResource HeaderToolButtonStyle}" Margin="4,0,0,0">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Path Data="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"
                           Fill="#4E5969" Stretch="Uniform" Width="14" Height="14" Margin="0,0,4,0"/>
