@@ -109,7 +109,10 @@ class PhaseTwoDatabaseTests(unittest.TestCase):
     def test_shop_aggregation_keeps_partial_valid_coverage(self):
         exact_id = db.persist(
             "https://xiaohongshu.com/goods-detail/exact",
-            payload("exact", "精确商品", "2026-09-18 00:00:00", shop_id="shop-partial", shop_name="部分覆盖店", sales=100),
+            payload("exact", "精确商品", "2026-09-17 23:55:00", shop_id="shop-partial", shop_name="部分覆盖店", sales=100),
+            is_midnight=True,
+            baseline_day="2026-09-18",
+            baseline_slot="2355",
         )
         db.persist(
             "https://xiaohongshu.com/goods-detail/exact",

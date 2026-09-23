@@ -73,14 +73,18 @@ let shopPageSize = 30;
 let importScope = 'shop';
 let refreshInFlight = false;
 const watchedImportJobs = new Set();
+let noticeTimer = null;
 
 function showNotice(message, type = '') {
+  clearTimeout(noticeTimer);
   notice.textContent = message;
   notice.className = 'notice' + (type ? ' ' + type : '');
   notice.hidden = false;
+  noticeTimer = setTimeout(hideNotice, 5000);
 }
 
 function hideNotice() {
+  clearTimeout(noticeTimer);
   notice.hidden = true;
 }
 
@@ -131,26 +135,34 @@ function metricCell(metric, positiveAccent = false) {
   return '<span class="' + valueClass + '" title="' + reason + '">' + display + '</span>';
 }
 
-function monitoredDuration(metric) {
-  const hours = Number(metric?.hours);
+function durationText(hours) {
+  hours = Number(hours);
   return !Number.isFinite(hours) || hours < 1
     ? '不足1小时'
     : (Math.round(hours * 10) / 10).toLocaleString('zh-CN') + '小时';
 }
 
-function monitoredMetricCell(metric, positiveAccent = false) {
+function monitoredMetricCell(product, metric, positiveAccent = false) {
   const base = metricCell(metric, positiveAccent);
-  if (!metric?.partial || metric.value == null) return base;
-  const hours = Number(metric.hours);
+  const hours = Number(product?.monitoring_hours);
   // 加入后已监控24小时（或四舍五入已达24小时），就不用再标注了
   if (!Number.isFinite(hours) || hours >= 23.9 || Math.round(hours) >= 24) return base;
   const durationStr = hours < 1 ? '<1h' : (Math.round(hours * 10) / 10) + 'h';
-  return base + '<small class="metric-hint" title="加入后已监控 ' + esc(monitoredDuration(metric)) + '">已监控 ' + esc(durationStr) + '</small>';
+  const effectiveHours = Number(metric?.hours);
+  const effectiveHint = Number.isFinite(effectiveHours) && Math.abs(effectiveHours - hours) >= 0.1
+    ? '；当前有效销量统计区间 ' + durationText(effectiveHours)
+    : '';
+  return base + '<small class="metric-hint" title="商品首次采集后已监控 ' + esc(durationText(hours) + effectiveHint) + '">已监控 ' + esc(durationStr) + '</small>';
 }
 
-function rolling24Basis(metric) {
-  if (metric?.value == null) return '';
-  return metric.partial ? '加入后 · 已监控' + monitoredDuration(metric) : '完整24小时';
+function rolling24Basis(product, metric) {
+  const monitoringHours = Number(product?.monitoring_hours);
+  if (!Number.isFinite(monitoringHours)) return '待首次采样';
+  const monitored = durationText(monitoringHours);
+  if (metric?.value == null) return '已监控' + monitored + ' · 待有效采样';
+  return metric.partial
+    ? '已监控' + monitored + ' · 有效统计' + durationText(metric.hours)
+    : '完整24小时';
 }
 
 function totalSalesCell(product) {
@@ -234,11 +246,7 @@ function pageHeader(title, countText, subtitle, cards) {
         '<div class="subtitle">' + esc(subtitle) + '</div>' +
       '</div>' +
       '<div class="page-title-actions">' +
-        '<button class="btn-export-primary" id="pageExportBtn" type="button">' +
-          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
-          '导出数据' +
-        '</button>' +
-        '<button class="btn-collect-secondary" id="pageCollectBtn" type="button">' +
+        '<button class="btn-page-primary" id="pageCollectBtn" type="button">' +
           '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>' +
           '立即采集' +
         '</button>' +
@@ -271,11 +279,9 @@ function pageHeader(title, countText, subtitle, cards) {
     });
   });
 
-  document.querySelector('#pageExportBtn')?.addEventListener('click', () => openExportDialog('all'));
-  document.querySelector('#pageCollectBtn')?.addEventListener('click', event => {
-    if (view === 'shops') collectVisibleShopProducts(event);
-    else collectVisibleProducts(event);
-  });
+  document.querySelector('#pageCollectBtn')?.addEventListener('click', event =>
+    collectAllProducts(event.currentTarget)
+  );
 }
 
 function productHeader(products, selectionMode = false) {
@@ -336,7 +342,7 @@ function productToolbar(products) {
     '<div class="toolbar-menu">' +
       '<button class="btn-tool" id="exportMenuBtn" type="button" aria-haspopup="menu" aria-expanded="false">' +
         '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>' +
-        '导出⌄' +
+        '导出' +
       '</button>' +
       '<div class="toolbar-menu-list" id="exportMenu" role="menu" hidden>' +
         '<button id="exportAllBtn" type="button" role="menuitem">全部导出</button>' +
@@ -457,7 +463,7 @@ function productRow(product, context) {
     '<td class="num">' + formatPrice(product.price) + '</td>' +
     '<td class="num">' + totalSalesCell(product) + '</td>' +
     '<td class="num">' + metricCell(product.today, true) + '</td>' +
-    '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
+    '<td class="num">' + monitoredMetricCell(product, product.rolling24, true) + '</td>' +
     '<td class="num">' + incrementCell(product.increment) + '</td>' +
     '<td>' + formatDateTime(productUpdateTime(product)) + '</td>' +
     '<td>' +
@@ -992,14 +998,12 @@ function shopsToolbar() {
     '</select><div class="grow"></div>' +
     '<button class="btn" id="exportButton" type="button">⇩ 导出</button>' +
     '<button class="btn" id="addShopProductButton" type="button">＋ 添加商品</button>' +
-    '<button class="btn primary" id="collectShopPageButton" type="button">立即采集本页</button>' +
     '<button class="btn" id="settingsButton" type="button">设置</button>';
 
   document.querySelector('#toolbarSearch').addEventListener('input', () => { shopPage = 1; renderShopList(); });
   document.querySelector('#shopSort').addEventListener('change', () => { shopPage = 1; renderShopList(); });
   document.querySelector('#exportButton').addEventListener('click', () => openExportDialog('all'));
   document.querySelector('#addShopProductButton').addEventListener('click', () => openProductImport('shop'));
-  document.querySelector('#collectShopPageButton').addEventListener('click', collectVisibleShopProducts);
   document.querySelector('#settingsButton').addEventListener('click', openSettings);
 }
 
@@ -1038,8 +1042,8 @@ function shopProductRow(product) {
     '<span>' + (paused ? '已暂停监控' : '商品监控中') + '</span></div></div></td>' +
     '<td class="num">' + formatPrice(product.price) + '</td>' +
     '<td class="num">' + totalSalesCell(product) + '</td>' +
-    '<td class="num">' + monitoredMetricCell(product.today, true) + '</td>' +
-    '<td class="num">' + monitoredMetricCell(product.rolling24, true) + '</td>' +
+    '<td class="num">' + metricCell(product.today, true) + '</td>' +
+    '<td class="num">' + monitoredMetricCell(product, product.rolling24, true) + '</td>' +
     '<td class="num">' + incrementCell(product.increment) + '</td>' +
     '<td>' + esc(productUpdateTime(product) || '—') + '</td>' +
     '<td><div class="actions"><button class="more-btn" type="button" aria-label="打开商品操作" title="商品操作" ' +
@@ -1131,22 +1135,17 @@ async function renderShopsPage({keepNotice = false} = {}) {
   if (!keepNotice) hideNotice();
 }
 
-async function collectProducts(products, button, scope = 'all') {
-  const targets = products.filter(p => p.monitor_state === 'active');
-  if (!targets.length) {
-    showNotice('当前范围没有可立即采集的正常商品。');
-    return;
-  }
+async function collectAllProducts(button) {
   const original = button.textContent;
   button.disabled = true;
   button.textContent = '提交中…';
   try {
     const result = await api('/api/jobs/collect', {
       method:'POST',
-      body:JSON.stringify({scope, product_ids:targets.map(product => product.id)})
+      body:JSON.stringify({scope:'all'})
     });
     showNotice(
-      '采集任务 #' + result.job_id + ' 已提交，共 ' + targets.length + ' 个商品；后台将按顺序采集。',
+      '采集任务 #' + result.job_id + ' 已提交，共 ' + Number(result.count || 0) + ' 个商品；后台将按顺序采集。',
       'success'
     );
   } catch (error) {
@@ -1155,22 +1154,6 @@ async function collectProducts(products, button, scope = 'all') {
     button.disabled = false;
     button.textContent = original;
   }
-}
-
-async function collectVisibleProducts(event) {
-  const button = event?.currentTarget || document.querySelector('#pageCollectBtn');
-  await collectProducts(
-    currentProductPageItems(),
-    button,
-    view === 'selection' ? 'selection' : 'single'
-  );
-}
-
-async function collectVisibleShopProducts(event) {
-  const button = event?.currentTarget || document.querySelector('#pageCollectBtn');
-  const productsById = new Map();
-  currentShopPageItems().forEach(shop => (shop.products || []).forEach(product => productsById.set(product.id, product)));
-  await collectProducts([...productsById.values()], button, 'shop');
 }
 
 function exportMetric(metric) {
@@ -1192,7 +1175,7 @@ function productExportRow(product) {
     total_sales: product.total_sales == null ? null : Number(product.total_sales),
     today: exportMetric(product.today),
     rolling24: exportMetric(product.rolling24),
-    rolling24_basis: rolling24Basis(product.rolling24),
+    rolling24_basis: rolling24Basis(product, product.rolling24),
     increment: exportMetric(product.increment),
     interval_hours: roundedIntervalHours(product.increment),
     updated_at: productUpdateTime(product),
@@ -1230,7 +1213,7 @@ function shopExportRows(shops) {
         total_sales: product.total_sales == null ? null : Number(product.total_sales),
         today: exportMetric(product.today),
         rolling24: exportMetric(product.rolling24),
-        rolling24_basis: rolling24Basis(product.rolling24),
+        rolling24_basis: rolling24Basis(product, product.rolling24),
         increment: exportMetric(product.increment),
         interval_hours: roundedIntervalHours(product.increment),
         updated_at: productUpdateTime(product),
@@ -1408,9 +1391,10 @@ async function watchImportJob(jobId) {
       if (job.status === 'success') {
         const label = {single:'单品监控', shop:'店铺监控', selection:'选品中心'}[job.scope] || '目标范围';
         const itemMessage = job.items?.length === 1 ? job.items[0].message : '';
+        const duplicate = job.items?.length === 1 && job.items[0].status === 'skipped';
         showNotice(
-          itemMessage && itemMessage !== '已保存观测记录' ? itemMessage + '。' : '商品已采集并加入' + label + '。',
-          'success'
+          itemMessage && itemMessage !== '已保存观测记录' ? (duplicate ? '！' : '') + itemMessage + '。' : '商品已采集并加入' + label + '。',
+          duplicate ? 'error' : 'success'
         );
       } else {
         showNotice(failed?.message || job.error || '添加任务未全部完成，请查看任务状态。', 'error');

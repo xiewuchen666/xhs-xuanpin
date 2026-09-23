@@ -49,6 +49,83 @@ def exact_counter(row: Optional[Dict[str, Any]]) -> bool:
     return bool(row and row.get("sales_precision") == "exact" and row.get("total_sales") is not None and row.get("_time"))
 
 
+def night_recovery_cutoffs(
+    histories: Dict[int, List[Dict[str, Any]]],
+    as_of: Optional[datetime] = None,
+) -> Dict[str, Optional[datetime]]:
+    """Return the time when every valid 23:55 reference recovered, by day."""
+    current = timestamp(as_of) or now()
+    references: Dict[str, List[Optional[datetime]]] = {}
+    for snapshots in histories.values():
+        normalized = [normalized_snapshot(row) for row in snapshots]
+        rows = sorted(
+            [row for row in normalized if row.get("_time") and row["_time"] <= current],
+            key=lambda row: (row["_time"], row.get("id", 0)),
+        )
+        by_day: Dict[str, List[Dict[str, Any]]] = {}
+        for row in rows:
+            if row.get("baseline_slot") == "2355" and row.get("baseline_day") and exact_counter(row):
+                by_day.setdefault(str(row["baseline_day"]), []).append(row)
+        for day_text, baselines in by_day.items():
+            midnight = datetime.combine(date.fromisoformat(day_text), datetime.min.time(), tzinfo=TZ)
+            expected = midnight - timedelta(minutes=5)
+            baseline = min(
+                baselines,
+                key=lambda row: (abs((row["_time"] - expected).total_seconds()), row.get("id", 0)),
+            )
+            recovered = next(
+                (
+                    row["_time"]
+                    for row in rows
+                    if exact_counter(row)
+                    and not row.get("is_midnight")
+                    and midnight + timedelta(hours=1) <= row["_time"] <= current
+                    and row["_time"] < midnight + timedelta(days=1)
+                    and int(row["total_sales"]) >= int(baseline["total_sales"])
+                ),
+                None,
+            )
+            references.setdefault(day_text, []).append(recovered)
+    return {
+        day_text: max(recovered) if recovered and all(recovered) else None
+        for day_text, recovered in references.items()
+    }
+
+
+def night_join_rows(
+    rows: List[Dict[str, Any]],
+    current: datetime,
+    recovery_cutoffs: Optional[Dict[str, Optional[datetime]]],
+) -> tuple[List[Dict[str, Any]], bool]:
+    """Exclude untrusted readings for products first seen after midnight through 07:00."""
+    if recovery_cutoffs is None or not rows:
+        return rows, False
+    first_time = rows[0]["_time"]
+    midnight = datetime.combine(first_time.date(), datetime.min.time(), tzinfo=TZ)
+    if not midnight <= first_time <= midnight + timedelta(hours=7):
+        return rows, False
+    day_text = midnight.date().isoformat()
+    cutoff = recovery_cutoffs.get(day_text)
+    if cutoff is None:
+        next_baseline = next(
+            (
+                row
+                for row in rows
+                if row["_time"] > first_time
+                and row.get("baseline_slot") == "2355"
+                and exact_counter(row)
+            ),
+            None,
+        )
+        if next_baseline is None:
+            return [], True
+        cutoff = next_baseline["_time"]
+    if cutoff > current:
+        return [], True
+    trusted = [row for row in rows if row["_time"] >= cutoff]
+    return trusted, not trusted
+
+
 def midnight_actions(rows: List[Dict[str, Any]]) -> Dict[int, str]:
     """Use each tagged midnight sample as the next day's baseline."""
     actions = {
@@ -398,28 +475,45 @@ def recent_increment(
     return interval(previous, latest, rows)
 
 
-def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Optional[datetime] = None, day_tolerance: int = 5, window_tolerance: int = 30, stale_minutes: int = 120) -> Dict[str, Any]:
+def enrich(
+    product: Dict[str, Any],
+    snapshots: List[Dict[str, Any]],
+    as_of: Optional[datetime] = None,
+    day_tolerance: int = 5,
+    window_tolerance: int = 30,
+    stale_minutes: int = 120,
+    night_recovery_cutoffs: Optional[Dict[str, Optional[datetime]]] = None,
+) -> Dict[str, Any]:
     p = dict(product)
     current = timestamp(as_of) or now()
-    rows = [normalized_snapshot(r) for r in snapshots]
-    rows = sorted(
-        [r for r in rows if r["_time"] and r["_time"] <= current],
+    observations = [normalized_snapshot(r) for r in snapshots]
+    observations = sorted(
+        [r for r in observations if r["_time"] and r["_time"] <= current],
         key=lambda r: (r["_time"], r.get("id", 0)),
     )
+    monitoring_started = observations[0] if observations else None
+    p["monitoring_started_at"] = monitoring_started.get("collected_at") if monitoring_started else None
+    p["monitoring_hours"] = (
+        max(0.0, (current - monitoring_started["_time"]).total_seconds() / 3600)
+        if monitoring_started
+        else None
+    )
+    rows, night_baseline_waiting = night_join_rows(observations, current, night_recovery_cutoffs)
     rows = resolve_counter_rows(rows)
     effective = effective_counter_rows(rows)
     latest = rows[-1] if rows else None
-    valid_sales = [r for r in rows if r.get("total_sales") is not None and r.get("sales_precision") in {"exact", "lower_bound", "approximate"}]
+    latest_observation = observations[-1] if observations else None
+    valid_sales = [r for r in observations if r.get("total_sales") is not None and r.get("sales_precision") in {"exact", "lower_bound", "approximate"}]
     last_sales = valid_sales[-1] if valid_sales else None
     if last_sales:
         p.update({k: last_sales.get(k) for k in ("total_sales", "sales_raw", "sales_precision")})
     else:
-        p.update(total_sales=None, sales_raw=latest.get("sales_raw", "") if latest else "", sales_precision="unknown")
+        p.update(total_sales=None, sales_raw=latest_observation.get("sales_raw", "") if latest_observation else "", sales_precision="unknown")
     p["sales_observed_at"] = last_sales.get("collected_at") if last_sales else None
-    p["sales_not_updated"] = bool(latest and (not last_sales or latest.get("id") != last_sales.get("id")))
-    p["latest_observed_at"] = latest.get("collected_at") if latest else None
-    p["latest_raw"] = latest.get("sales_raw", "") if latest else ""
-    p["price_observed_at"] = next((r.get("collected_at") for r in reversed(rows) if r.get("price") is not None), None)
+    p["sales_not_updated"] = bool(latest_observation and (not last_sales or latest_observation.get("id") != last_sales.get("id")))
+    p["latest_observed_at"] = latest_observation.get("collected_at") if latest_observation else None
+    p["latest_raw"] = latest_observation.get("sales_raw", "") if latest_observation else ""
+    p["price_observed_at"] = next((r.get("collected_at") for r in reversed(observations) if r.get("price") is not None), None)
     p["precision_label"] = PRECISION_LABELS.get(p.get("sales_precision"), "口径未知")
     observed = timestamp(p["sales_observed_at"])
     age = (current - observed).total_seconds() / 60 if observed else None
@@ -478,6 +572,13 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
         current,
     )
 
+    if night_baseline_waiting:
+        reason = "夜间新商品等待小红书销量波动结束后的有效基线"
+        today = missing(reason)
+        increment = missing(reason)
+        rolling = missing(reason)
+        prior = missing(reason)
+
     latest_counter_state = latest.get("_counter_state") if latest else None
     if latest_counter_state == "pending_drop":
         today = missing("销量回落待确认；等待下一次采样确认", "anomaly")
@@ -498,7 +599,8 @@ def enrich(product: Dict[str, Any], snapshots: List[Dict[str, Any]], as_of: Opti
     p["latest_increment"], p["previous_collected_at"] = increment["value"], increment["from_time"]
     p["velocity"] = round(increment["value"] / increment["hours"], 2) if increment["value"] is not None and increment["hours"] and increment["hours"] >= 5/60 else None
     p["velocity_reason"] = "实际采样区间的平均新增/小时，不是实时速度或预测" if p["velocity"] is not None else "区间不足 5 分钟或缺少有效读数"
-    p["counter_state"] = latest_counter_state or "unknown"
+    p["counter_state"] = "waiting_baseline" if night_baseline_waiting else (latest_counter_state or "unknown")
+    p["night_baseline_waiting"] = night_baseline_waiting
     p["anomaly"] = any(m["quality"] == "anomaly" for m in (today, yesterday, increment, rolling, prior))
     collection_status = p.get("collection_status") or "active"
     failed = collection_status == "abnormal" or p.get("last_attempt_status") == "failed" or (p.get("last_status") not in (None, "", "正常") and not p.get("last_attempt_status"))
@@ -584,12 +686,14 @@ def sales_trend(
     snapshots: List[Dict[str, Any]],
     as_of: Optional[datetime] = None,
     day_tolerance: int = 5,
+    night_recovery_cutoffs: Optional[Dict[str, Optional[datetime]]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Build daily and hourly sales series from the existing counter rules."""
     current = timestamp(as_of) or now()
     source = [snapshot for snapshot in snapshots if (timestamp(snapshot.get("collected_at")) or current) <= current]
     rows = [normalized_snapshot(row) for row in source]
     rows = sorted([row for row in rows if row["_time"]], key=lambda row: (row["_time"], row.get("id", 0)))
+    rows, _ = night_join_rows(rows, current, night_recovery_cutoffs)
     rows = resolve_counter_rows(rows)
     effective = effective_counter_rows(rows)
 
@@ -629,7 +733,7 @@ def sales_trend(
 
     cutoff = current - timedelta(hours=24)
     hourly = []
-    chart = [point for point in chart_rows(source) if not point["midnight"]]
+    chart = [point for point in chart_rows(rows) if not point["midnight"]]
     for point in chart:
         point_time = timestamp(point["time"])
         if not point_time or point_time < cutoff or point_time > current:

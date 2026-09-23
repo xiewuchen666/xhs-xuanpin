@@ -470,7 +470,7 @@ public partial class MainWindow : Window
                 if (_xhsLiveSurfaceReady)
                 {
                     BridgeTitle.Text = "小红书已启动";
-                    BridgeStatus.Text = "打开商品详情后可继续加入监控或选品中心";
+                    BridgeStatus.Text = "打开商品详情后可继续加入监控或店铺监控";
                 }
                 else
                 {
@@ -980,7 +980,7 @@ public partial class MainWindow : Window
                 _currentProductSummary = null;
                 _lastProductSummaryRefreshUtc = DateTime.MinValue;
                 BridgeTitle.Text = "请在小红书中打开商品详情";
-                BridgeStatus.Text = "进入商品详情后可一键加入监控或选品中心";
+                BridgeStatus.Text = "进入商品详情后可一键加入监控或店铺监控";
             }
         }
         catch (Exception ex)
@@ -1000,36 +1000,36 @@ public partial class MainWindow : Window
 
     private static string FormatProductSummary(AndroidProductSummary? summary)
     {
-        if (summary is null) return "可直接加入监控或选品中心";
+        if (summary is null) return "可直接加入监控或店铺监控";
         if (!string.IsNullOrWhiteSpace(summary.Title) && !string.IsNullOrWhiteSpace(summary.PriceText))
             return $"{summary.Title} · {summary.PriceText}";
         if (!string.IsNullOrWhiteSpace(summary.Title)) return summary.Title;
         if (!string.IsNullOrWhiteSpace(summary.PriceText)) return $"当前商品 · {summary.PriceText}";
-        return "可直接加入监控或选品中心";
+        return "可直接加入监控或店铺监控";
     }
 
     private void SetProductActionsVisible(bool visible)
     {
         MonitorButton.Visibility = Visibility.Visible;
-        SelectionButton.Visibility = Visibility.Visible;
+        ShopMonitorButton.Visibility = Visibility.Visible;
         MonitorButton.IsEnabled = visible && !_monitorBusy;
-        SelectionButton.IsEnabled = visible && !_monitorBusy;
+        ShopMonitorButton.IsEnabled = visible && !_monitorBusy;
     }
 
     private async void MonitorButton_Click(object sender, RoutedEventArgs e) =>
-        await ExecuteCurrentProductActionAsync(addToSelection: false);
+        await ExecuteCurrentProductActionAsync(addToShopMonitor: false);
 
-    private async void SelectionButton_Click(object sender, RoutedEventArgs e) =>
-        await ExecuteCurrentProductActionAsync(addToSelection: true);
+    private async void ShopMonitorButton_Click(object sender, RoutedEventArgs e) =>
+        await ExecuteCurrentProductActionAsync(addToShopMonitor: true);
 
-    private async Task ExecuteCurrentProductActionAsync(bool addToSelection)
+    private async Task ExecuteCurrentProductActionAsync(bool addToShopMonitor)
     {
         if (_monitorBusy) return;
 
         _monitorBusy = true;
         MonitorButton.IsEnabled = false;
-        SelectionButton.IsEnabled = false;
-        BridgeTitle.Text = addToSelection ? "正在加入选品中心" : "正在加入监控";
+        ShopMonitorButton.IsEnabled = false;
+        BridgeTitle.Text = addToShopMonitor ? "正在加入店铺监控" : "正在加入监控";
         BridgeStatus.Text = "正在读取当前商品，请勿切换页面";
 
         try
@@ -1051,7 +1051,7 @@ public partial class MainWindow : Window
                 AppLogger.Info("MainWindow", "Current product URL read from Android activity");
             }
 
-            var scope = addToSelection ? "selection" : "single";
+            var scope = addToShopMonitor ? "shop" : "single";
             BridgeTitle.Text = "正在提交后台采集";
             BridgeStatus.Text = "取得链接成功，即将返回商品浏览";
             using var importResponse = await Http.PostAsJsonAsync(
@@ -1061,7 +1061,7 @@ public partial class MainWindow : Window
             if (!importResponse.IsSuccessStatusCode || result?.ok != true || !result.queued)
                 throw new InvalidOperationException(result?.error ?? "采集失败");
 
-            BridgeTitle.Text = addToSelection ? "选品任务已提交" : "监控任务已提交";
+            BridgeTitle.Text = addToShopMonitor ? "店铺监控任务已提交" : "监控任务已提交";
             BridgeStatus.Text = $"后台任务 #{result.job_id} 正在采集，可以继续浏览下一个商品";
             _pageMessageHoldUntilUtc = DateTime.UtcNow.AddSeconds(3);
             await Workspace.ExecuteScriptAsync(
@@ -1071,9 +1071,9 @@ public partial class MainWindow : Window
         {
             AppLogger.Error(
                 "MainWindow",
-                addToSelection ? "Add-to-selection action failed" : "Add-to-monitor action failed",
+                addToShopMonitor ? "Add-to-shop-monitor action failed" : "Add-to-monitor action failed",
                 ex);
-            BridgeTitle.Text = addToSelection ? "加入选品中心失败" : "加入监控失败";
+            BridgeTitle.Text = addToShopMonitor ? "加入店铺监控失败" : "加入监控失败";
             BridgeStatus.Text = ex.Message;
             _pageMessageHoldUntilUtc = DateTime.UtcNow.AddSeconds(3);
         }

@@ -206,6 +206,98 @@ class MetricCompatibilityTests(unittest.TestCase):
         self.assertEqual(full_day["rolling24"]["value"], 50)
         self.assertFalse(full_day["rolling24"].get("partial", False))
 
+    def test_night_new_product_waits_for_platform_recovery_before_counting_growth(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-23 07:00:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-23 02:43:00", "total_sales": 4429, "sales_raw": "已售4429", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-23 03:00:00", "total_sales": 4430, "sales_raw": "已售4430", "sales_precision": "exact", "price": 10},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-23 05:00:00", "total_sales": 4440, "sales_raw": "已售4440", "sales_precision": "exact", "price": 10},
+            {"id": 4, "product_id": 1, "collected_at": "2026-09-23 06:00:30", "total_sales": 4472, "sales_raw": "已售4472", "sales_precision": "exact", "price": 10},
+            {"id": 5, "product_id": 1, "collected_at": "2026-09-23 07:00:00", "total_sales": 4473, "sales_raw": "已售4473", "sales_precision": "exact", "price": 10},
+        ]
+        recovery = {"2026-09-23": metrics.timestamp("2026-09-23 06:00:21")}
+
+        waiting = metrics.enrich(
+            product,
+            snapshots,
+            as_of="2026-09-23 05:00:00",
+            night_recovery_cutoffs=recovery,
+        )
+        recovered = metrics.enrich(
+            product,
+            snapshots,
+            as_of="2026-09-23 07:00:00",
+            night_recovery_cutoffs=recovery,
+        )
+        trend = metrics.sales_trend(
+            snapshots,
+            as_of="2026-09-23 07:00:00",
+            night_recovery_cutoffs=recovery,
+        )
+
+        self.assertIsNone(waiting["today"]["value"])
+        self.assertIsNone(waiting["rolling24"]["value"])
+        self.assertIsNone(waiting["increment"]["value"])
+        self.assertEqual(waiting["health_label"], "数据已更新")
+        self.assertAlmostEqual(waiting["monitoring_hours"], 2.283, places=3)
+        self.assertEqual(recovered["today"]["value"], 1)
+        self.assertEqual(recovered["rolling24"]["value"], 1)
+        self.assertEqual(recovered["increment"]["value"], 1)
+        self.assertAlmostEqual(recovered["monitoring_hours"], 4.283, places=3)
+        self.assertAlmostEqual(recovered["rolling24"]["hours"], 0.992, places=3)
+        self.assertEqual([point["label"] for point in trend["hourly"]], ["06:00", "07:00"])
+        self.assertEqual([point["value"] for point in trend["hourly"]], [None, 1])
+
+    def test_night_recovery_cutoff_waits_for_the_last_valid_reference_product(self):
+        histories = {
+            1: [
+                {"id": 1, "product_id": 1, "collected_at": "2026-09-22 23:55:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact", "is_midnight": 1, "baseline_day": "2026-09-23", "baseline_slot": "2355"},
+                {"id": 2, "product_id": 1, "collected_at": "2026-09-23 01:00:00", "total_sales": 101, "sales_raw": "已售101", "sales_precision": "exact"},
+            ],
+            2: [
+                {"id": 3, "product_id": 2, "collected_at": "2026-09-22 23:55:00", "total_sales": 200, "sales_raw": "已售200", "sales_precision": "exact", "is_midnight": 1, "baseline_day": "2026-09-23", "baseline_slot": "2355"},
+                {"id": 4, "product_id": 2, "collected_at": "2026-09-23 01:00:00", "total_sales": 180, "sales_raw": "已售180", "sales_precision": "exact"},
+                {"id": 5, "product_id": 2, "collected_at": "2026-09-23 06:00:21", "total_sales": 202, "sales_raw": "已售202", "sales_precision": "exact"},
+            ],
+        }
+
+        waiting = metrics.night_recovery_cutoffs(histories, as_of="2026-09-23 05:00:00")
+        recovered = metrics.night_recovery_cutoffs(histories, as_of="2026-09-23 07:00:00")
+
+        self.assertIsNone(waiting["2026-09-23"])
+        self.assertEqual(recovered["2026-09-23"], metrics.timestamp("2026-09-23 06:00:21"))
+
+    def test_next_day_reading_cannot_recover_the_previous_night(self):
+        histories = {
+            1: [
+                {"id": 1, "product_id": 1, "collected_at": "2026-09-22 23:55:00", "total_sales": 100, "sales_raw": "已售100", "sales_precision": "exact", "is_midnight": 1, "baseline_day": "2026-09-23", "baseline_slot": "2355"},
+                {"id": 2, "product_id": 1, "collected_at": "2026-09-23 06:00:00", "total_sales": 90, "sales_raw": "已售90", "sales_precision": "exact"},
+                {"id": 3, "product_id": 1, "collected_at": "2026-09-24 01:00:00", "total_sales": 105, "sales_raw": "已售105", "sales_precision": "exact"},
+            ]
+        }
+
+        cutoffs = metrics.night_recovery_cutoffs(histories, as_of="2026-09-24 01:00:00")
+
+        self.assertIsNone(cutoffs["2026-09-23"])
+
+    def test_unconfirmed_night_join_can_restart_from_its_next_2355_baseline(self):
+        product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-24 01:00:00"}
+        snapshots = [
+            {"id": 1, "product_id": 1, "collected_at": "2026-09-23 02:00:00", "total_sales": 90, "sales_raw": "已售90", "sales_precision": "exact", "price": 10},
+            {"id": 2, "product_id": 1, "collected_at": "2026-09-23 23:55:00", "total_sales": 105, "sales_raw": "已售105", "sales_precision": "exact", "price": 10, "is_midnight": 1, "baseline_day": "2026-09-24", "baseline_slot": "2355"},
+            {"id": 3, "product_id": 1, "collected_at": "2026-09-24 01:00:00", "total_sales": 106, "sales_raw": "已售106", "sales_precision": "exact", "price": 10},
+        ]
+
+        result = metrics.enrich(
+            product,
+            snapshots,
+            as_of="2026-09-24 01:00:00",
+            night_recovery_cutoffs={"2026-09-23": None, "2026-09-24": metrics.timestamp("2026-09-24 01:00:00")},
+        )
+
+        self.assertEqual(result["today"]["value"], 1)
+        self.assertFalse(result["night_baseline_waiting"])
+
     def test_2355_baseline_ignores_midnight_and_ordinary_drops_until_recovery(self):
         product = {"id": 1, "monitor_state": "active", "last_collected_at": "2026-09-19 01:10:00"}
         snapshots = [
@@ -495,6 +587,66 @@ class PhaseOneApiTests(unittest.TestCase):
             self.client.get(f"/api/products/{self.product_id}/trend").status_code,
             404,
         )
+
+    def test_product_api_uses_valid_reference_products_to_guard_night_new_product(self):
+        first_reference = db.persist(
+            "https://xiaohongshu.com/goods-detail/reference-one",
+            payload("reference-one", "参照商品一", "2026-09-22 23:55:00", sales=100),
+            is_midnight=True,
+            baseline_day="2026-09-23",
+            baseline_slot="2355",
+        )
+        db.persist(
+            "https://xiaohongshu.com/goods-detail/reference-one",
+            payload("reference-one", "参照商品一", "2026-09-23 01:00:00", sales=101),
+            expected_product_id=first_reference,
+        )
+        second_reference = db.persist(
+            "https://xiaohongshu.com/goods-detail/reference-two",
+            payload("reference-two", "参照商品二", "2026-09-22 23:55:00", sales=200),
+            is_midnight=True,
+            baseline_day="2026-09-23",
+            baseline_slot="2355",
+        )
+        db.persist(
+            "https://xiaohongshu.com/goods-detail/reference-two",
+            payload("reference-two", "参照商品二", "2026-09-23 01:00:00", sales=180),
+            expected_product_id=second_reference,
+        )
+        db.persist(
+            "https://xiaohongshu.com/goods-detail/reference-two",
+            payload("reference-two", "参照商品二", "2026-09-23 06:00:21", sales=202),
+            expected_product_id=second_reference,
+        )
+        night_product = db.persist(
+            "https://xiaohongshu.com/goods-detail/night-new",
+            payload("night-new", "夜间新增商品", "2026-09-23 02:43:00", sales=4429),
+        )
+        db.persist(
+            "https://xiaohongshu.com/goods-detail/night-new",
+            payload("night-new", "夜间新增商品", "2026-09-23 06:00:30", sales=4472),
+            expected_product_id=night_product,
+        )
+        db.persist(
+            "https://xiaohongshu.com/goods-detail/night-new",
+            payload("night-new", "夜间新增商品", "2026-09-23 07:00:00", sales=4473),
+            expected_product_id=night_product,
+        )
+
+        waiting = next(
+            product for product in db.list_products(as_of="2026-09-23 05:00:00")
+            if product["id"] == night_product
+        )
+        recovered = next(
+            product for product in db.list_products(as_of="2026-09-23 07:00:00")
+            if product["id"] == night_product
+        )
+
+        self.assertIsNone(waiting["today"]["value"])
+        self.assertTrue(waiting["night_baseline_waiting"])
+        self.assertEqual(recovered["today"]["value"], 1)
+        self.assertEqual(recovered["rolling24"]["value"], 1)
+        self.assertFalse(recovered["night_baseline_waiting"])
 
     def test_collect_one_adds_snapshot_and_paused_product_is_blocked(self):
         collected = payload(

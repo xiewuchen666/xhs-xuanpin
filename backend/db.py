@@ -455,6 +455,46 @@ def get_product(product_id: int) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def _night_recovery_cutoffs(
+    conn: sqlite3.Connection,
+    *,
+    as_of=None,
+) -> dict[str, datetime | None]:
+    reference_ids = [
+        int(row["id"])
+        for row in conn.execute(
+            """
+            SELECT DISTINCT p.id
+            FROM products p
+            JOIN snapshots baseline ON baseline.product_id=p.id
+            WHERE p.monitor_state='active'
+              AND p.collection_status='active'
+              AND COALESCE(p.last_attempt_status,'')<>'failed'
+              AND p.sales_precision='exact'
+              AND baseline.baseline_slot='2355'
+              AND baseline.sales_precision='exact'
+              AND baseline.total_sales IS NOT NULL
+              AND (
+                EXISTS(SELECT 1 FROM single_monitor_products sm WHERE sm.product_id=p.id)
+                OR EXISTS(SELECT 1 FROM shop_monitor_products sh WHERE sh.product_id=p.id)
+                OR EXISTS(SELECT 1 FROM selection_pool_products sp WHERE sp.product_id=p.id)
+              )
+            """
+        )
+    ]
+    histories: dict[int, list[dict[str, Any]]] = {
+        product_id: [] for product_id in reference_ids
+    }
+    if reference_ids:
+        placeholders = ",".join("?" for _ in reference_ids)
+        for row in conn.execute(
+            f"SELECT * FROM snapshots WHERE product_id IN ({placeholders}) ORDER BY product_id,collected_at,id",
+            reference_ids,
+        ):
+            histories[int(row["product_id"])].append(dict(row))
+    return metrics.night_recovery_cutoffs(histories, as_of=as_of)
+
+
 def get_product_trend(product_id: int, as_of=None) -> dict[str, Any] | None:
     with closing(connect()) as conn:
         product = conn.execute(
@@ -485,6 +525,7 @@ def get_product_trend(product_id: int, as_of=None) -> dict[str, Any] | None:
             day_tolerance = int(tolerance["value"]) if tolerance else 5
         except (TypeError, ValueError):
             day_tolerance = 5
+        recovery_cutoffs = _night_recovery_cutoffs(conn, as_of=as_of)
         return {
             "product": {
                 "id": product["id"],
@@ -493,7 +534,12 @@ def get_product_trend(product_id: int, as_of=None) -> dict[str, Any] | None:
                 "image_url": product["image_url"],
                 "last_collected_at": product["last_collected_at"],
             },
-            **metrics.sales_trend(snapshots, as_of=as_of, day_tolerance=day_tolerance),
+            **metrics.sales_trend(
+                snapshots,
+                as_of=as_of,
+                day_tolerance=day_tolerance,
+                night_recovery_cutoffs=recovery_cutoffs,
+            ),
         }
 
 
@@ -608,6 +654,7 @@ def _enrich_rows(
             return int(cfg.get(key, fallback))
         except (TypeError, ValueError):
             return fallback
+    recovery_cutoffs = _night_recovery_cutoffs(conn, as_of=as_of)
     return [
         metrics.enrich(
             row,
@@ -616,6 +663,7 @@ def _enrich_rows(
             day_tolerance=number("day_tolerance_minutes", 5),
             window_tolerance=number("window_tolerance_minutes", 30),
             stale_minutes=number("stale_minutes", 120),
+            night_recovery_cutoffs=recovery_cutoffs,
         )
         for row in rows
     ]

@@ -448,6 +448,19 @@ class PhaseThreeTests(unittest.TestCase):
         job = jobs.get_job(job_id)
         self.assertEqual([item["product_id"] for item in job["items"]], [first, second])
 
+    def test_global_collect_api_without_ids_queues_all_monitored_products(self):
+        first = self.add_single("global-first")
+        second = self.add_selection_only("global-second")
+        app = server.create_app(testing=True)
+        client = app.test_client()
+
+        response = client.post("/api/jobs/collect", json={"scope": "all"})
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["count"], 2)
+        job = jobs.get_job(response.get_json()["job_id"])
+        self.assertEqual([item["product_id"] for item in job["items"]], [first, second])
+
     def test_adding_selection_does_not_silently_resume_paused_product(self):
         product_id = self.add_single("paused-selection")
         db.set_monitor_state(product_id, "paused")

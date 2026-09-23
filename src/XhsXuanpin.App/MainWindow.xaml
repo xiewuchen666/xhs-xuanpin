@@ -430,14 +430,14 @@
                         <TextBlock x:Name="BridgeStatus" Visibility="Collapsed"/>
                     </StackPanel>
 
-                    <!-- Right Buttons: 加入监控 and 加入选品中心 -->
+                    <!-- Right Buttons: 加入监控 and 加入店铺监控 -->
                     <Button Grid.Column="1" x:Name="MonitorButton" Content="加入监控"
                             Style="{StaticResource ProductActionButtonStyle}"
                             IsEnabled="False" Click="MonitorButton_Click"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
-                    <Button Grid.Column="3" x:Name="SelectionButton" Content="加入选品中心"
+                    <Button Grid.Column="3" x:Name="ShopMonitorButton" Content="加入店铺监控"
                             Style="{StaticResource ProductActionButtonStyle}"
-                            IsEnabled="False" Click="SelectionButton_Click"
+                            IsEnabled="False" Click="ShopMonitorButton_Click"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True"/>
                 </Grid>
             </Border>

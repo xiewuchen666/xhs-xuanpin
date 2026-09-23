@@ -195,15 +195,20 @@ def create_app(testing: bool = False) -> Flask:
             scope = str(body.get("scope") or "all").strip()
             if scope not in {"all", "single", "shop", "selection"}:
                 raise ValueError("无效采集范围")
-            if not isinstance(product_ids, list) or not product_ids:
+            normalized = None
+            if product_ids is not None:
+                if not isinstance(product_ids, list) or not product_ids:
+                    raise ValueError("请选择需要采集的商品")
+                normalized = []
+                for value in product_ids:
+                    product_id = int(value)
+                    if product_id not in normalized:
+                        normalized.append(product_id)
+            elif scope != "all":
                 raise ValueError("请选择需要采集的商品")
-            normalized = []
-            for value in product_ids:
-                product_id = int(value)
-                if product_id not in normalized:
-                    normalized.append(product_id)
             job_id = jobs.enqueue(scope, product_ids=normalized)
-            return jsonify(ok=True, job_id=job_id, queued=True), 202
+            job = jobs.get_job(job_id)
+            return jsonify(ok=True, job_id=job_id, queued=True, count=len(job["items"])), 202
         except (TypeError, ValueError) as exc:
             return _api_error(str(exc))
 
