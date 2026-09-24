@@ -380,13 +380,20 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="0" x:Name="XhsAppToggleButton"
-                        Style="{StaticResource PhoneAppToggleButtonStyle}"
-                        Content="初始化中…"
-                        Margin="0"
-                        IsEnabled="False"
-                        Click="XhsAppToggleButton_Click"
-                        ToolTip="Android 正在后台初始化；右侧监控和后台采集已可使用"/>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="XhsAppToggleButton"
+                            Style="{StaticResource PhoneAppToggleButtonStyle}"
+                            Content="初始化中…"
+                            IsEnabled="False"
+                            Click="XhsAppToggleButton_Click"
+                            ToolTip="Android 正在后台初始化；右侧监控和后台采集已可使用"/>
+                    <Button x:Name="MuMuControlButton"
+                            Style="{StaticResource ProductActionButtonStyle}"
+                            Content="打开模拟器"
+                            Margin="8,0,0,0"
+                            Click="MuMuControlButton_Click"
+                            ToolTip="打开 MuMu，安装或登录小红书，也可手动排查模拟器问题"/>
+                </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
                     <Ellipse x:Name="AndroidStatusDot" Width="6" Height="6" Fill="#E89A19" Margin="0,0,6,0" VerticalAlignment="Center"/>
                     <TextBlock x:Name="AndroidStatus" Text="Android · 后台初始化" Foreground="#4E5969" FontSize="12"

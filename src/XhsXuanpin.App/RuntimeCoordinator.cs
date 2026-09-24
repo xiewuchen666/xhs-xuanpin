@@ -17,6 +17,7 @@ internal sealed class RuntimeCoordinator : IDisposable
     private const int TargetAndroidDensity = 480;
     private readonly string _root = FindProjectRoot();
     private readonly string _mumuDirectory = FindMuMuDirectory();
+    private readonly HashSet<int> _mumuMainPidsAtStartup = Process.GetProcessesByName("MuMuNxMain").Select(process => process.Id).ToHashSet();
     private string Adb => Path.Combine(_mumuDirectory, "nx_main", "adb.exe");
     private Process? _python;
     private Process? _scrcpy;
@@ -32,6 +33,11 @@ internal sealed class RuntimeCoordinator : IDisposable
     private readonly SemaphoreSlim _androidInputLock = new(1, 1);
     private DateTime _lastScrcpyRecoveryAttemptUtc;
     private DateTime _lastAdbConnectAttemptUtc;
+    private volatile bool _stopping;
+    private volatile bool _manualMuMuControl;
+    private volatile bool _launchingMuMu;
+    private bool _launchedMuMu;
+    public bool IsManualMuMuControl => _manualMuMuControl;
 
     public async Task StartBackendAsync()
     {
@@ -46,18 +52,29 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (phoneHost == IntPtr.Zero) throw new InvalidOperationException("手机宿主窗口尚未创建");
         _phoneHost = phoneHost;
 
+        await _scrcpyLifecycleLock.WaitAsync();
         if (_androidStarted)
         {
-            AttachScrcpyWindow();
+            try { if (IsScrcpyHealthy()) AttachScrcpyWindow(); }
+            finally { _scrcpyLifecycleLock.Release(); }
             return;
         }
 
         try
         {
-            await EnsureAndroidAsync();
+            if (_stopping) throw new OperationCanceledException("工作台正在退出");
+            if (_manualMuMuControl) throw new OperationCanceledException("模拟器已切换为人工操作");
+            var launchedMuMu = await EnsureAndroidAsync();
             _androidUi = new AndroidUi(Adb, Serial);
-            await EnsureScrcpyAsync();
+            if (await IsXhsInstalledAsync()) await LaunchXhsAppAsync();
+            else
+            {
+                _scrcpySuspended = true;
+                AppLogger.Info("Runtime", "Xiaohongshu is not installed; Android remains available for manual setup");
+            }
+            if (_stopping) throw new OperationCanceledException("工作台正在退出");
             _androidStarted = true;
+            if (launchedMuMu) await SetMuMuWindowsVisibleAsync(false);
             AppLogger.Info("Runtime", "Android initialization completed");
         }
         catch
@@ -65,6 +82,10 @@ internal sealed class RuntimeCoordinator : IDisposable
             _androidUi = null;
             ResetScrcpyState(terminateRunningProcess: true);
             throw;
+        }
+        finally
+        {
+            _scrcpyLifecycleLock.Release();
         }
     }
 
@@ -110,8 +131,7 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     public async Task<bool> EnsureHealthyAsync(bool phoneVisible)
     {
-        if (!_androidStarted) return false;
-        HideMuMuWindows();
+        if (!_androidStarted || _stopping || _manualMuMuControl) return false;
         if (_scrcpySuspended || IsScrcpyHealthy()) return false;
         if (!await _scrcpyLifecycleLock.WaitAsync(0)) return false;
 
@@ -161,6 +181,7 @@ internal sealed class RuntimeCoordinator : IDisposable
 
     private async Task EnsurePythonServiceAsync()
     {
+        if (_stopping) return;
         if (await IsServiceReadyAsync())
         {
             AppLogger.Info("Runtime", "Backend service already healthy");
@@ -182,6 +203,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         startInfo.ArgumentList.Add(server);
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add("17861");
+        if (_stopping) return;
         _python = Process.Start(startInfo) ?? throw new InvalidOperationException("Python 本地服务启动失败");
         _ownsPython = true;
         AppLogger.Info("Runtime", $"Backend service process started; pid={_python.Id}");
@@ -220,19 +242,74 @@ internal sealed class RuntimeCoordinator : IDisposable
         throw new InvalidOperationException("Python 本地服务未能启动");
     }
 
-    private async Task EnsureAndroidAsync()
+    private async Task<bool> EnsureAndroidAsync()
     {
         if (!File.Exists(Adb)) throw new InvalidOperationException("未找到 MuMu ADB");
+        var launchedMuMu = false;
         if (!await AdbReadyAsync())
         {
             AppLogger.Warning("Runtime", "Android ADB is not ready; launching MuMu player");
-            var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
-            Process.Start(new ProcessStartInfo(manager, "api launch_player 0") { UseShellExecute = false, CreateNoWindow = true });
-            for (var i = 0; i < 120 && !await AdbReadyAsync(); i++) await Task.Delay(1000);
+            launchedMuMu = true;
+            await LaunchMuMuAsync();
         }
-        if (!await AdbReadyAsync()) throw new InvalidOperationException("MuMu Android 未在 120 秒内连接");
-        await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
+        try
+        {
+            await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
+        }
+        catch (TimeoutException)
+        {
+            if (_manualMuMuControl) throw new OperationCanceledException("模拟器已切换为人工操作");
+            AppLogger.Warning("Runtime", "Android ADB reports online but shell is unresponsive; restarting MuMu player");
+            await ShutdownMuMuPlayerAsync();
+            launchedMuMu = true;
+            await LaunchMuMuAsync();
+            await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
+        }
         await EnsureReadableDensityAsync();
+        if (_manualMuMuControl) throw new OperationCanceledException("模拟器已切换为人工操作");
+        return launchedMuMu;
+    }
+
+    private async Task LaunchMuMuAsync()
+    {
+        var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
+        _launchedMuMu = true;
+        _launchingMuMu = true;
+        try
+        {
+            Process.Start(new ProcessStartInfo(manager, "api launch_player 0") { UseShellExecute = false, CreateNoWindow = true });
+            var deadline = DateTime.UtcNow.AddSeconds(120);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (_stopping) throw new OperationCanceledException("工作台正在退出");
+                if (_manualMuMuControl) throw new OperationCanceledException("模拟器已切换为人工操作");
+                await SetMuMuWindowsVisibleAsync(false);
+                if (await AdbReadyAsync())
+                {
+                    try
+                    {
+                        await RunAsync(Adb, "-s", Serial, "shell", "true");
+                        return;
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
+                    {
+                    }
+                }
+                await Task.Delay(500);
+            }
+            throw new InvalidOperationException("MuMu Android 未在 120 秒内连接");
+        }
+        finally
+        {
+            _launchingMuMu = false;
+        }
+    }
+
+    public async Task<bool> IsXhsInstalledAsync()
+    {
+        if (!await AdbReadyAsync()) throw new InvalidOperationException("Android 连接已断开");
+        var path = await RunAsync(Adb, "-s", Serial, "shell", "pm", "path", "com.xingin.xhs");
+        return path.Contains("package:", StringComparison.Ordinal);
     }
 
     public async Task<bool> IsXhsRunningAsync()
@@ -383,8 +460,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         finally
         {
             ResetScrcpyState(terminateRunningProcess: true);
-            HideMuMuWindows();
-            if (await AdbReadyAsync())
+            if (!_manualMuMuControl && await AdbReadyAsync())
             {
                 try
                 {
@@ -405,45 +481,78 @@ internal sealed class RuntimeCoordinator : IDisposable
         await _scrcpyLifecycleLock.WaitAsync();
         try
         {
-            await EnsureAndroidAsync();
-            AppLogger.Info("Runtime", "Starting phone stream and Xiaohongshu app");
-            await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
-            await EnsureScrcpyAsync();
-            await RunAsync(Adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
-            for (var i = 0; i < 30; i++)
-            {
-                if (await IsXhsRunningAsync())
-                {
-                    _scrcpySuspended = false;
-                    HideMuMuWindows();
-                    AppLogger.Info("Runtime", "Xiaohongshu app process and phone stream started");
-                    return;
-                }
-                await Task.Delay(100);
-            }
-            throw new InvalidOperationException("小红书未能在预期时间内启动");
+            if (_stopping) throw new OperationCanceledException("工作台正在退出");
+            if (_manualMuMuControl) throw new OperationCanceledException("模拟器正在由用户操作");
+            var launchedMuMu = await EnsureAndroidAsync();
+            await LaunchXhsAppAsync();
+            if (launchedMuMu) await SetMuMuWindowsVisibleAsync(false);
         }
         catch
         {
             _scrcpySuspended = true;
             ResetScrcpyState(terminateRunningProcess: true);
-            if (await AdbReadyAsync())
-            {
-                try
-                {
-                    await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_SLEEP");
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.Warning("Runtime", $"Android screen sleep after failed start failed: {ex.Message}");
-                }
-            }
             throw;
         }
         finally
         {
             _scrcpyLifecycleLock.Release();
         }
+    }
+
+    private async Task LaunchXhsAppAsync()
+    {
+        if (_stopping) throw new OperationCanceledException("工作台正在退出");
+        if (_manualMuMuControl) throw new OperationCanceledException("模拟器正在由用户操作");
+        if (!await IsXhsInstalledAsync()) throw new InvalidOperationException("尚未安装小红书，请点击“打开模拟器”完成安装");
+        AppLogger.Info("Runtime", "Starting phone stream and Xiaohongshu app");
+        await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
+        await EnsureScrcpyAsync();
+        await RunAsync(Adb, "-s", Serial, "shell", "monkey", "-p", "com.xingin.xhs", "1");
+        for (var i = 0; i < 30; i++)
+        {
+            if (_stopping) throw new OperationCanceledException("工作台正在退出");
+            if (_manualMuMuControl) throw new OperationCanceledException("模拟器已切换为人工操作");
+            if (await IsXhsRunningAsync())
+            {
+                _scrcpySuspended = false;
+                AppLogger.Info("Runtime", "Xiaohongshu app process and phone stream started");
+                return;
+            }
+            await Task.Delay(100);
+        }
+        throw new InvalidOperationException("小红书未能在预期时间内启动");
+    }
+
+    public async Task StopXhsAndMuMuAsync()
+    {
+        try { await StopXhsAsync(); }
+        catch (Exception ex) { AppLogger.Warning("Runtime", $"Xiaohongshu stop before MuMu shutdown failed: {ex.Message}"); }
+        await StopMuMuAsync();
+        await StopMuMuProcessesAsync(includeExisting: true);
+    }
+
+    public async Task StopMuMuAsync()
+    {
+        await _scrcpyLifecycleLock.WaitAsync();
+        try
+        {
+            _scrcpySuspended = true;
+            ResetScrcpyState(terminateRunningProcess: true);
+            await ShutdownMuMuPlayerAsync();
+        }
+        finally
+        {
+            _scrcpyLifecycleLock.Release();
+        }
+    }
+
+    public void BeginShutdown() => _stopping = true;
+
+    public async Task StopForExitAsync()
+    {
+        _stopping = true;
+        await StopMuMuAsync();
+        await StopMuMuProcessesAsync(includeExisting: false);
     }
 
     private async Task EnsureReadableDensityAsync()
@@ -513,7 +622,6 @@ internal sealed class RuntimeCoordinator : IDisposable
         if (IsScrcpyHealthy())
         {
             AttachScrcpyWindow();
-            HideMuMuWindows();
             AppLogger.Info("Runtime", "Existing scrcpy window is healthy and attached");
             return;
         }
@@ -572,7 +680,6 @@ internal sealed class RuntimeCoordinator : IDisposable
             throw new InvalidOperationException($"未找到本次 scrcpy 进程({_scrcpy.Id})的窗口");
 
         AttachScrcpyWindow();
-        HideMuMuWindows();
         AppLogger.Info("Runtime", $"scrcpy window attached; hwnd={_scrcpyWindow}");
     }
 
@@ -744,22 +851,162 @@ internal sealed class RuntimeCoordinator : IDisposable
         return output;
     }
 
-    private static void HideMuMuWindows()
+    private void BeginManualMuMuControl()
     {
-        NativeMethods.EnumWindows((window, _) =>
+        _manualMuMuControl = true;
+        AppLogger.Info("Runtime", "MuMu manual control enabled");
+    }
+
+    public void EndManualMuMuControl()
+    {
+        _manualMuMuControl = false;
+        AppLogger.Info("Runtime", "MuMu manual control ended");
+    }
+
+    public async Task OpenMuMuForManualControlAsync()
+    {
+        BeginManualMuMuControl();
+        var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
+        if (!_launchingMuMu)
         {
-            NativeMethods.GetWindowThreadProcessId(window, out var pid);
-            try
+            using var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all"));
+            var running = info.RootElement.TryGetProperty("0", out var device) &&
+                          device.GetProperty("is_process_started").GetBoolean();
+            if (!running)
             {
-                using var process = Process.GetProcessById((int)pid);
-                if (process.ProcessName.StartsWith("MuMu", StringComparison.OrdinalIgnoreCase))
-                    NativeMethods.ShowWindow(window, NativeMethods.SwHide);
+                _launchedMuMu = true;
+                Process.Start(new ProcessStartInfo(manager, "api launch_player 0") { UseShellExecute = false, CreateNoWindow = true });
             }
-            catch (ArgumentException)
+        }
+        for (var i = 0; i < 60; i++)
+        {
+            if (_stopping) throw new OperationCanceledException("工作台正在退出");
+            if (await SetMuMuWindowsVisibleAsync(true)) return;
+            await Task.Delay(250);
+        }
+        throw new InvalidOperationException("MuMu 窗口未能在 15 秒内打开");
+    }
+
+    public async Task HideMuMuForWorkbenchAsync() => await SetMuMuWindowsVisibleAsync(false, includeExisting: true);
+
+    private async Task<bool> SetMuMuWindowsVisibleAsync(bool visible, bool includeExisting = false)
+    {
+        if (!visible && _manualMuMuControl) return false;
+        var found = false;
+        try
+        {
+            var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
+            using var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all"));
+            var managerPids = new HashSet<uint>();
+            foreach (var process in Process.GetProcessesByName("MuMuNxMain"))
             {
+                using (process)
+                {
+                    if ((!visible && !includeExisting && _mumuMainPidsAtStartup.Contains(process.Id)) || process.HasExited ||
+                        !string.Equals(process.MainModule?.FileName,
+                            Path.Combine(_mumuDirectory, "nx_main", "MuMuNxMain.exe"),
+                            StringComparison.OrdinalIgnoreCase)) continue;
+                    managerPids.Add((uint)process.Id);
+                }
             }
-            return true;
-        }, IntPtr.Zero);
+            NativeMethods.EnumWindows((window, _) =>
+            {
+                NativeMethods.GetWindowThreadProcessId(window, out var pid);
+                if (!managerPids.Contains(pid)) return true;
+                var windowClass = new StringBuilder(80);
+                NativeMethods.GetClassName(window, windowClass, windowClass.Capacity);
+                var mainWindow = windowClass.ToString() == "Qt5156QWindowIcon";
+                var startupPopup = windowClass.ToString() == "Qt5156QWindowToolSaveBits";
+                if (!mainWindow && (visible || !startupPopup)) return true;
+                if (startupPopup)
+                {
+                    var title = new StringBuilder(80);
+                    NativeMethods.GetWindowText(window, title, title.Capacity);
+                    if (title.ToString() != "MuMu模拟器") return true;
+                }
+                if (!visible && _manualMuMuControl) return true;
+                NativeMethods.ShowWindow(window, visible ? NativeMethods.SwRestore : NativeMethods.SwHide);
+                if (visible) NativeMethods.SetForegroundWindow(window);
+                found = true;
+                return true;
+            }, IntPtr.Zero);
+            if (!info.RootElement.TryGetProperty("0", out var device) ||
+                !device.TryGetProperty("main_wnd", out var windowValue) ||
+                !device.TryGetProperty("pid", out var pidValue) ||
+                !long.TryParse(windowValue.GetString(), System.Globalization.NumberStyles.HexNumber, null, out var handle)) return found;
+            var window = new IntPtr(handle);
+            NativeMethods.GetWindowThreadProcessId(window, out var windowPid);
+            if (windowPid == pidValue.GetInt32() && (visible || !_manualMuMuControl))
+            {
+                NativeMethods.ShowWindow(window, visible ? NativeMethods.SwRestore : NativeMethods.SwHide);
+                if (visible) NativeMethods.SetForegroundWindow(window);
+                found = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warning("Runtime", $"MuMu window visibility change failed: {ex.Message}");
+        }
+        return found;
+    }
+
+    private async Task ShutdownMuMuPlayerAsync()
+    {
+        var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
+        using (var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all")))
+            if (!info.RootElement.TryGetProperty("0", out var device) ||
+                !device.GetProperty("is_process_started").GetBoolean())
+            {
+                await DisconnectMuMuAdbAsync();
+                return;
+            }
+
+        AppLogger.Info("Runtime", "Stopping MuMu player 0");
+        await RunAsync(manager, "api", "shutdown_player", "0");
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            using var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all"));
+            if (!info.RootElement.GetProperty("0").GetProperty("is_process_started").GetBoolean())
+            {
+                await DisconnectMuMuAdbAsync();
+                AppLogger.Info("Runtime", "MuMu player 0 stopped");
+                return;
+            }
+            await Task.Delay(500);
+        }
+        throw new InvalidOperationException("MuMu 0 号实例未能在 30 秒内关闭");
+    }
+
+    private async Task DisconnectMuMuAdbAsync()
+    {
+        try { await RunAsync(Adb, "disconnect", Serial); }
+        catch (Exception ex) { AppLogger.Warning("Runtime", $"MuMu ADB disconnect failed: {ex.Message}"); }
+    }
+
+    private async Task StopMuMuProcessesAsync(bool includeExisting)
+    {
+        if (!includeExisting && !_launchedMuMu) return;
+        var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
+        using var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all"));
+        if (info.RootElement.EnumerateObject().Any(player =>
+                player.Value.TryGetProperty("is_process_started", out var started) && started.GetBoolean())) return;
+
+        foreach (var processName in includeExisting ? new[] { "MuMuNxMain", "MuMuNxService" } : new[] { "MuMuNxMain" })
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            using (process)
+            {
+                if ((!includeExisting && _mumuMainPidsAtStartup.Contains(process.Id)) || process.HasExited) continue;
+                if (!string.Equals(process.MainModule?.FileName,
+                        Path.Combine(_mumuDirectory, "nx_main", processName + ".exe"),
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                process.Kill();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await process.WaitForExitAsync(timeout.Token);
+                AppLogger.Info("Runtime", $"MuMu process stopped; name={processName}, pid={process.Id}");
+            }
+        }
     }
 
     private static string FindProjectRoot()
@@ -842,7 +1089,7 @@ internal static class NativeMethods
 {
     internal const uint JobObjectLimitKillOnJobClose = 0x00002000;
     internal const int JobObjectExtendedLimitInformationClass = 9;
-    internal const int GwlStyle = -16, SwHide = 0, SwShow = 5;
+    internal const int GwlStyle = -16, SwHide = 0, SwShow = 5, SwRestore = 9;
     internal const int WhMouseLl = 14;
     internal const int WmLButtonDown = 0x0201, WmRButtonDown = 0x0204, WmMButtonDown = 0x0207;
     internal const long WsChild = 0x40000000, WsPopup = 0x80000000, WsCaption = 0x00C00000, WsThickFrame = 0x00040000;
@@ -975,6 +1222,13 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern int GetWindowText(IntPtr window, StringBuilder text, int maxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern int GetClassName(IntPtr window, StringBuilder name, int maxCount);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetForegroundWindow(IntPtr window);
 
     [DllImport("user32.dll")]
     internal static extern IntPtr GetParent(IntPtr window);

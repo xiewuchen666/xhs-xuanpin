@@ -93,10 +93,20 @@ public partial class App : System.Windows.Application
             window.RestoreFromTray();
     }
 
-    internal void ExitApplication()
+    internal async void ExitApplication()
     {
         if (_isExiting) return;
         _isExiting = true;
+        try
+        {
+            if (MainWindow is XhsXuanpin.App.MainWindow window)
+                await window.PrepareForExitAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("App", "Workbench exit cleanup failed", ex);
+            System.Windows.MessageBox.Show($"退出时未能完全关闭模拟器：{ex.Message}", "小红书选品工作台", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         Shutdown();
     }
 

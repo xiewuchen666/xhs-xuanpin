@@ -33,6 +33,8 @@ public partial class MainWindow : Window
     private bool _globalCollectionToggleBusy;
     private bool _autoCollectionEnabled = true;
     private bool _xhsToggleBusy;
+    private bool _mumuControlBusy;
+    private bool _xhsInstalled;
     private bool _xhsRunning;
     private bool _xhsLiveSurfaceReady;
     private bool _pageStateRefreshInProgress;
@@ -42,6 +44,7 @@ public partial class MainWindow : Window
     private DateTime _lastXhsAppStateRefreshUtc = DateTime.MinValue;
     private AndroidProductSummary? _currentProductSummary;
     private bool _windowSizing;
+    private Task? _androidInitializationTask;
     private string _workspaceView = "single";
 
     private const int WmNcHitTest = 0x0084;
@@ -102,6 +105,7 @@ public partial class MainWindow : Window
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         UpdateWindowStateButton();
+        UpdateMuMuControlButton();
         Closed += (_, _) =>
         {
             AppLogger.Info("MainWindow", "Main window closed; disposing runtime");
@@ -152,6 +156,14 @@ public partial class MainWindow : Window
         HideToTray();
     }
 
+    internal async Task PrepareForExitAsync()
+    {
+        _pageStateTimer.Stop();
+        _runtime.BeginShutdown();
+        if (_androidInitializationTask is not null) await _androidInitializationTask;
+        await _runtime.StopForExitAsync();
+    }
+
     private void HideToTray()
     {
         ShowInTaskbar = false;
@@ -185,6 +197,7 @@ public partial class MainWindow : Window
         try
         {
             await _runtime.StartBackendAsync();
+            if (((App)System.Windows.Application.Current).IsExiting) return;
             SetBackendHealthy();
             var webviewData = Environment.GetEnvironmentVariable("XHS_XUANPIN_DATA_DIR");
             var webviewEnvironment = File.Exists(Path.Combine(AppContext.BaseDirectory, "installed.marker"))
@@ -199,8 +212,9 @@ public partial class MainWindow : Window
             _workspaceReady = true;
             _pageStateTimer.Start();
             await RefreshPageStateAsync();
+            if (((App)System.Windows.Application.Current).IsExiting) return;
             AppLogger.Info("MainWindow", "Workspace initialization completed; starting Android in background");
-            _ = InitializeAndroidInBackgroundAsync();
+            _androidInitializationTask = InitializeAndroidInBackgroundAsync();
         }
         catch (Exception ex)
         {
@@ -222,17 +236,31 @@ public partial class MainWindow : Window
         try
         {
             await _runtime.StartAndroidAsync(_phonePanel.Handle);
+            if (_runtime.IsManualMuMuControl) return;
             _runtime.ResizePhone(_phonePanel.ClientSize);
             InstallPhoneMouseHook();
+            _xhsInstalled = await _runtime.IsXhsInstalledAsync();
             _androidReady = true;
+            _androidInitializationFailed = false;
             AndroidStatus.Text = "Android · 已连接";
             AndroidStatusDot.Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xB4, 0x2A));
             await RefreshXhsAppStateAsync(force: true);
+            if (!_xhsInstalled)
+            {
+                BridgeTitle.Text = "请先安装小红书";
+                BridgeStatus.Text = "点击“打开模拟器”完成安装和登录，再返回工作台";
+            }
             FitPhoneSurface();
             AppLogger.Info("MainWindow", "Android background initialization completed");
         }
         catch (Exception ex)
         {
+            if (((App)System.Windows.Application.Current).IsExiting) return;
+            if (_runtime.IsManualMuMuControl)
+            {
+                ShowManualMuMuStatus("可在模拟器中安装、登录或排查；完成后返回工作台后台运行");
+                return;
+            }
             AppLogger.Error("MainWindow", "Android background initialization failed; workspace remains available", ex);
             _androidInitializationFailed = true;
             AndroidStatus.Text = "Android · 启动失败";
@@ -400,6 +428,21 @@ public partial class MainWindow : Window
 
     private void UpdateXhsAppToggleButton()
     {
+        if (_runtime.IsManualMuMuControl)
+        {
+            XhsAppToggleButton.IsEnabled = false;
+            XhsAppToggleButton.Content = "手动操作中";
+            XhsAppToggleButton.ToolTip = "完成模拟器操作后，点击“返回工作台后台运行”";
+            return;
+        }
+
+        if (_mumuControlBusy)
+        {
+            XhsAppToggleButton.IsEnabled = false;
+            XhsAppToggleButton.Content = "处理中…";
+            return;
+        }
+
         if (!_androidReady)
         {
             XhsAppToggleButton.IsEnabled = false;
@@ -417,11 +460,98 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (!_xhsInstalled)
+        {
+            XhsAppToggleButton.IsEnabled = false;
+            XhsAppToggleButton.Content = "未安装小红书";
+            XhsAppToggleButton.ToolTip = "点击旁边的“打开模拟器”完成安装";
+            return;
+        }
+
         XhsAppToggleButton.IsEnabled = true;
         XhsAppToggleButton.Content = _xhsRunning ? "关闭小红书" : "启动小红书";
         XhsAppToggleButton.ToolTip = _xhsRunning
-            ? "关闭小红书 App 和手机画面流；MuMu、ADB 和后台采集保持运行"
+            ? "选择仅关闭小红书，或同时关闭模拟器；后台采集继续运行"
             : "唤醒 Android 并启动手机画面和小红书 App";
+    }
+
+    private void UpdateMuMuControlButton()
+    {
+        MuMuControlButton.IsEnabled = !_mumuControlBusy;
+        MuMuControlButton.Content = _runtime.IsManualMuMuControl ? "返回工作台后台运行" : "打开模拟器";
+        MuMuControlButton.ToolTip = _runtime.IsManualMuMuControl
+            ? "完成安装、登录或排查后，重新接入工作台并收起模拟器窗口"
+            : "打开 MuMu，安装或登录小红书，也可手动排查模拟器问题";
+    }
+
+    private void ShowManualMuMuStatus(string message)
+    {
+        AndroidStatus.Text = "Android · 手动操作";
+        AndroidStatusDot.Fill = System.Windows.Media.Brushes.DarkOrange;
+        BridgeTitle.Text = "模拟器由你操作";
+        BridgeStatus.Text = message;
+        _xhsLiveSurfaceReady = false;
+        SetProductActionsVisible(false);
+        UpdatePhoneSurfaceMode(layoutChanged: true);
+        UpdateXhsAppToggleButton();
+        UpdateMuMuControlButton();
+    }
+
+    private async void MuMuControlButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_mumuControlBusy) return;
+        var returning = _runtime.IsManualMuMuControl;
+        _mumuControlBusy = true;
+        UpdateMuMuControlButton();
+        try
+        {
+            if (!returning)
+            {
+                var openTask = _runtime.OpenMuMuForManualControlAsync();
+                ShowManualMuMuStatus("可在模拟器中安装、登录或排查；完成后返回工作台后台运行");
+                await openTask;
+                return;
+            }
+
+            if (_androidInitializationTask is not null) await _androidInitializationTask;
+            _runtime.EndManualMuMuControl();
+            AndroidStatus.Text = "Android · 正在连接";
+            AndroidStatusDot.Fill = System.Windows.Media.Brushes.DarkOrange;
+            await _runtime.StartAndroidAsync(_phonePanel.Handle);
+            await _runtime.StartXhsAsync();
+            _xhsInstalled = await _runtime.IsXhsInstalledAsync();
+            _runtime.ResizePhone(_phonePanel.ClientSize);
+            InstallPhoneMouseHook();
+            _androidReady = true;
+            _androidInitializationFailed = false;
+            await RefreshXhsAppStateAsync(force: true);
+            if (!_xhsRunning) throw new InvalidOperationException("小红书未能启动，请在模拟器中检查后重试");
+            await _runtime.HideMuMuForWorkbenchAsync();
+            AndroidStatus.Text = "Android · 已连接";
+            AndroidStatusDot.Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xB4, 0x2A));
+            BridgeTitle.Text = _xhsLiveSurfaceReady ? "小红书已启动" : "小红书正在启动";
+            BridgeStatus.Text = _xhsLiveSurfaceReady
+                ? "打开商品详情后可继续加入监控或店铺监控"
+                : "等待手机画面稳定后自动显示";
+            AppLogger.Info("MainWindow", "MuMu returned to workbench background mode");
+        }
+        catch (Exception ex)
+        {
+            if (((App)System.Windows.Application.Current).IsExiting) return;
+            AppLogger.Error("MainWindow", "MuMu manual control switch failed", ex);
+            if (returning)
+            {
+                try { await _runtime.OpenMuMuForManualControlAsync(); }
+                catch (Exception showError) { AppLogger.Warning("MainWindow", $"MuMu window restore failed: {showError.Message}"); }
+            }
+            ShowManualMuMuStatus(ex.Message);
+        }
+        finally
+        {
+            _mumuControlBusy = false;
+            UpdateMuMuControlButton();
+            UpdateXhsAppToggleButton();
+        }
     }
 
     private void UpdatePhoneSurfaceMode(bool layoutChanged = false)
@@ -462,6 +592,8 @@ public partial class MainWindow : Window
 
         try
         {
+            var closeMuMu = _xhsRunning ? ShowCloseXhsChoice() : null;
+            if (_xhsRunning && closeMuMu is null) return;
             _currentProductSummary = null;
             _lastProductSummaryRefreshUtc = DateTime.MinValue;
             SetProductActionsVisible(false);
@@ -472,9 +604,15 @@ public partial class MainWindow : Window
                 UpdatePhoneSurfaceMode(layoutChanged: true);
                 BridgeTitle.Text = "正在关闭小红书";
                 BridgeStatus.Text = "正在停止手机画面流；后台监控采集继续运行";
-                await _runtime.StopXhsAsync();
+                if (closeMuMu == true) await _runtime.StopXhsAndMuMuAsync();
+                else await _runtime.StopXhsAsync();
                 _xhsRunning = false;
                 _xhsLiveSurfaceReady = false;
+                if (closeMuMu == true)
+                {
+                    AndroidStatus.Text = "Android · 已关闭";
+                    AndroidStatusDot.Fill = System.Windows.Media.Brushes.Gray;
+                }
                 BridgeTitle.Text = "小红书已关闭";
                 BridgeStatus.Text = "需要选品时点击左上角“启动小红书”";
             }
@@ -485,6 +623,8 @@ public partial class MainWindow : Window
                 BridgeTitle.Text = "正在启动小红书";
                 BridgeStatus.Text = "启动完成前继续显示占位画面";
                 await _runtime.StartXhsAsync();
+                AndroidStatus.Text = "Android · 已连接";
+                AndroidStatusDot.Fill = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xB4, 0x2A));
                 _xhsRunning = await _runtime.IsXhsRunningAsync();
                 _xhsLiveSurfaceReady = _xhsRunning &&
                     await _runtime.WaitForXhsLiveSurfaceStableAsync(
@@ -526,6 +666,43 @@ public partial class MainWindow : Window
             _xhsToggleBusy = false;
             UpdateXhsAppToggleButton();
         }
+    }
+
+    private bool? ShowCloseXhsChoice()
+    {
+        var dialog = new Window
+        {
+            Owner = this,
+            Title = "关闭小红书",
+            Width = 390,
+            Height = 165,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar = false,
+            Background = System.Windows.Media.Brushes.White,
+            FontFamily = FontFamily
+        };
+        var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(20) };
+        panel.Children.Add(new System.Windows.Controls.TextBlock
+        {
+            Text = "请选择关闭范围；右侧后台采集不受影响。",
+            Margin = new Thickness(0, 0, 0, 22),
+            FontSize = 13
+        });
+        var buttons = new System.Windows.Controls.StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right
+        };
+        var onlyXhs = new System.Windows.Controls.Button { Content = "仅关闭小红书", Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 0, 8, 0) };
+        var withMuMu = new System.Windows.Controls.Button { Content = "同时关闭模拟器", Padding = new Thickness(12, 6, 12, 6) };
+        onlyXhs.Click += (_, _) => dialog.DialogResult = false;
+        withMuMu.Click += (_, _) => dialog.DialogResult = true;
+        buttons.Children.Add(onlyXhs);
+        buttons.Children.Add(withMuMu);
+        panel.Children.Add(buttons);
+        dialog.Content = panel;
+        return dialog.ShowDialog();
     }
 
     private void InstallPhoneMouseHook()
@@ -971,7 +1148,7 @@ public partial class MainWindow : Window
                 _lastCollectorStatusRefreshUtc = DateTime.UtcNow;
             }
 
-            if (!_androidReady) return;
+            if (_mumuControlBusy || _runtime.IsManualMuMuControl || !_androidReady) return;
 
             var recovered = await _runtime.EnsureHealthyAsync(_phoneVisible && _xhsLiveSurfaceReady);
             if (recovered)
@@ -989,8 +1166,10 @@ public partial class MainWindow : Window
                 _lastProductSummaryRefreshUtc = DateTime.MinValue;
                 if (DateTime.UtcNow >= _pageMessageHoldUntilUtc)
                 {
-                    BridgeTitle.Text = "小红书已关闭";
-                    BridgeStatus.Text = "需要选品时点击左上角“启动小红书”";
+                    BridgeTitle.Text = _xhsInstalled ? "小红书已关闭" : "请先安装小红书";
+                    BridgeStatus.Text = _xhsInstalled
+                        ? "需要选品时点击左上角“启动小红书”"
+                        : "点击“打开模拟器”完成安装和登录，再返回工作台";
                 }
                 return;
             }
