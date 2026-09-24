@@ -42,6 +42,7 @@ const exportCancel = document.querySelector('#exportCancel');
 const exportCsv = document.querySelector('#exportCsv');
 const exportXlsx = document.querySelector('#exportXlsx');
 const exportSummary = document.querySelector('#exportSummary');
+const exportType = document.querySelector('#exportType');
 
 const settingsOverlay = document.querySelector('#settingsOverlay');
 const settingsClose = document.querySelector('#settingsClose');
@@ -1172,6 +1173,7 @@ function roundedIntervalHours(metric) {
 
 function productExportRow(product) {
   return {
+    id: product.id,
     title: product.title || '',
     shop_name: product.shop_name || '',
     url: product.url || '',
@@ -1264,6 +1266,8 @@ function openExportDialog(scope = 'all') {
     ? '导出已勾选的商品，不受当前分页限制。'
     : '导出的不是当前页，而是当前搜索、筛选和排序条件下的全部结果。';
   exportSummary.textContent = (selected ? '已选中：' : '当前筛选结果：') + payload.summary + '。';
+  exportType.value = '';
+  document.querySelector('#exportTypeRow').style.display = view === 'shops' ? 'none' : 'block';
   const empty = payload.rows.length === 0;
   exportCsv.disabled = empty;
   exportXlsx.disabled = empty;
@@ -1304,6 +1308,8 @@ async function deleteSelectedProducts() {
 
 function submitExport(format) {
   const payload = currentExportPayload();
+  const detailPeriod = view === 'shops' ? '' : exportType.value;
+  if (detailPeriod && format !== 'xlsx') return;
   if (!payload.rows.length) {
     showNotice('当前筛选结果为空，没有可导出的数据。', 'error');
     closeExportDialog();
@@ -1318,12 +1324,13 @@ function submitExport(format) {
       type:'export',
       module:payload.module,
       format,
-      rows:payload.rows
+      rows:payload.rows,
+      detail_period:detailPeriod
     });
     closeExportDialog();
     showNotice('请选择保存位置，保存后会自动生成导出文件。', 'success');
     setTimeout(() => {
-      exportCsv.disabled = false;
+      exportCsv.disabled = Boolean(exportType.value);
       exportXlsx.disabled = false;
     }, 500);
     return;
@@ -1348,7 +1355,7 @@ function submitExport(format) {
   const input = document.createElement('input');
   input.type = 'hidden';
   input.name = 'payload';
-  input.value = JSON.stringify({module:payload.module, format, rows:payload.rows});
+  input.value = JSON.stringify({module:payload.module, format, rows:payload.rows, detail_period:detailPeriod});
   form.appendChild(input);
   document.body.appendChild(form);
   form.submit();
@@ -1357,7 +1364,7 @@ function submitExport(format) {
   closeExportDialog();
   showNotice('正在生成 ' + format.toUpperCase() + ' 导出文件，请选择保存位置。', 'success');
   setTimeout(() => {
-    exportCsv.disabled = false;
+    exportCsv.disabled = Boolean(exportType.value);
     exportXlsx.disabled = false;
   }, 500);
 }
@@ -1830,6 +1837,10 @@ exportClose.addEventListener('click', closeExportDialog);
 exportCancel.addEventListener('click', closeExportDialog);
 exportCsv.addEventListener('click', () => submitExport('csv'));
 exportXlsx.addEventListener('click', () => submitExport('xlsx'));
+exportType.addEventListener('change', () => {
+  exportCsv.disabled = Boolean(exportType.value);
+  exportCsv.title = exportType.value ? '销量明细仅支持 Excel' : '';
+});
 
 if (window.chrome?.webview?.addEventListener) {
   window.chrome.webview.addEventListener('message', event => {

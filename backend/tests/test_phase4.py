@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, time
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import db
 import exporter
+import metrics
 import server
 
 
@@ -140,6 +142,45 @@ class ExportApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("仅支持", response.get_json()["error"])
+
+    def test_sales_detail_exports_only_selected_product_and_daily_last_reading(self):
+        now = metrics.now()
+        yesterday = datetime.combine(now.date() - timedelta(days=1), time(12), tzinfo=metrics.TZ)
+
+        def collect(item, when, sales):
+            return db.persist(
+                f"https://example.invalid/{item}",
+                {"item_id": item, "title": f"商品{item}", "observed_at": metrics.text_time(when),
+                 "total_sales": sales, "sales_raw": f"已售{sales}", "sales_precision": "exact"},
+            )
+
+        chosen = collect("chosen", yesterday, 10)
+        collect("chosen", yesterday.replace(hour=23), 12)
+        collect("chosen", now - timedelta(minutes=1), 16)
+        other = collect("other", now - timedelta(minutes=1), 99)
+
+        response = self.client.post("/api/export", json={
+            "module": "single", "format": "xlsx", "detail_period": "7d", "rows": [{"id": chosen}],
+        })
+        self.assertEqual(response.status_code, 200)
+        workbook = load_workbook(io.BytesIO(response.data))
+        sheet = workbook["销量明细"]
+        self.assertEqual([sheet.cell(4, col).value for col in range(1, 7)],
+                         ["商品标题", "链接", "销量", "增量", "采集时间", "备注"])
+        self.assertEqual(sheet.max_row, 6)
+        self.assertEqual((sheet["C5"].value, sheet["D5"].value), (16, 4))
+        self.assertEqual(sheet["C6"].value, 12)
+        self.assertEqual(sheet["A6"].value, "商品chosen")
+        self.assertEqual(sheet["A5"].alignment.horizontal, "center")
+        self.assertEqual(sheet["A5"].border.bottom.color.rgb, "00F2F2F2")
+        self.assertTrue(sheet.tables)
+        self.assertTrue(sheet.conditional_formatting)
+        self.assertNotIn("商品other", [row[0].value for row in sheet.iter_rows(min_row=5)])
+
+        rejected = self.client.post("/api/export", json={
+            "module": "selection", "format": "xlsx", "detail_period": "24h", "rows": [{"id": other}],
+        })
+        self.assertEqual(rejected.status_code, 400)
 
 
 if __name__ == "__main__":

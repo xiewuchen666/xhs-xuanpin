@@ -679,8 +679,10 @@ public partial class MainWindow : Window
 
         var format = (message.format ?? "").Trim().ToLowerInvariant();
         var module = (message.module ?? "").Trim();
+        var detailPeriod = (message.detail_period ?? "").Trim();
         if (format is not ("csv" or "xlsx") ||
-            module is not ("single" or "selection" or "shops"))
+            module is not ("single" or "selection" or "shops") ||
+            (detailPeriod.Length > 0 && (format != "xlsx" || module == "shops" || detailPeriod is not ("24h" or "7d" or "30d"))))
         {
             PostWorkspaceExportResult(false, "导出参数无效。");
             return;
@@ -693,9 +695,10 @@ public partial class MainWindow : Window
             _ => "单品监控"
         };
         var extension = "." + format;
+        var detailLabel = detailPeriod switch { "24h" => "近24小时销量明细", "7d" => "近7天销量明细", "30d" => "近30天销量明细", _ => "" };
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
-            FileName = $"{label}-{DateTime.Now:yyyyMMdd-HHmmss}{extension}",
+            FileName = $"{label}-{(detailLabel.Length > 0 ? detailLabel + "-" : "")}{DateTime.Now:yyyyMMdd-HHmmss}{extension}",
             AddExtension = true,
             DefaultExt = extension,
             Filter = format == "csv"
@@ -715,7 +718,8 @@ public partial class MainWindow : Window
             {
                 module,
                 format,
-                rows = message.rows
+                rows = message.rows,
+                detail_period = detailPeriod
             });
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var response = await Http.PostAsync("/api/export", content);
@@ -1164,7 +1168,7 @@ public partial class MainWindow : Window
         host.Equals("xiaohongshu.com", StringComparison.OrdinalIgnoreCase) ||
         host.EndsWith(".xiaohongshu.com", StringComparison.OrdinalIgnoreCase);
 
-    private sealed record WorkspaceMessage(string? type, string? module, string? format, JsonElement rows);
+    private sealed record WorkspaceMessage(string? type, string? module, string? format, JsonElement rows, string? detail_period);
     private sealed record ImportResponse(bool ok, int job_id, bool queued, int count, string? error);
     private sealed record ActionResponse(bool ok, string? error);
     private sealed record ScheduledJobResponse(string id, string? next_run_time);

@@ -150,7 +150,15 @@ def create_app(testing: bool = False) -> Flask:
             module = str(body.get("module") or "").strip()
             fmt = str(body.get("format") or "").strip().lower()
             rows = body.get("rows")
-            data, mimetype, filename = exporter.build_export(module, fmt, rows)
+            detail_period = str(body.get("detail_period") or "").strip()
+            if detail_period:
+                if fmt != "xlsx" or not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                    raise ValueError("销量明细仅支持 Excel 和有效商品列表")
+                product_ids = [row.get("id") for row in rows]
+                histories = db.export_product_histories(module, product_ids)
+                data, mimetype, filename = exporter.build_sales_detail(module, detail_period, histories)
+            else:
+                data, mimetype, filename = exporter.build_export(module, fmt, rows)
             return send_file(
                 BytesIO(data),
                 mimetype=mimetype,

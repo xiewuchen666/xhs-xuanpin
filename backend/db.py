@@ -712,6 +712,28 @@ def list_selection_products(as_of=None) -> list[dict[str, Any]]:
         return _enrich_rows(conn, rows, as_of=as_of)
 
 
+def export_product_histories(module: str, product_ids: list[int]) -> list[dict[str, Any]]:
+    membership = {"single": "single_monitor_products", "selection": "selection_pool_products"}.get(module)
+    if not membership:
+        raise ValueError("销量明细仅支持单品监控和选品中心")
+    if not product_ids or len(product_ids) > 2000 or any(type(item) is not int or item <= 0 for item in product_ids):
+        raise ValueError("导出商品 ID 无效或数量过多")
+    histories = []
+    with closing(connect()) as conn:
+        for product_id in dict.fromkeys(product_ids):
+            product = conn.execute(
+                f"SELECT p.id,p.title,p.url FROM products p JOIN {membership} m ON m.product_id=p.id WHERE p.id=?",
+                (product_id,),
+            ).fetchone()
+            if not product:
+                raise ValueError("所选商品不属于当前导出模块")
+            snapshots = [dict(row) for row in conn.execute(
+                "SELECT * FROM snapshots WHERE product_id=? ORDER BY collected_at,id", (product_id,)
+            )]
+            histories.append({"product": dict(product), "snapshots": snapshots})
+    return histories
+
+
 def _aggregate_metric(
     products: list[dict[str, Any]],
     key: str,

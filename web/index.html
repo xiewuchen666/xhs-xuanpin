@@ -857,6 +857,14 @@
         <button class="action-close" id="exportClose" type="button" aria-label="关闭">×</button>
       </div>
       <div class="export-summary" id="exportSummary">正在统计可导出数据…</div>
+      <label id="exportTypeRow" style="display:block;margin-top:12px;font-size:12px;color:var(--ink2);">导出内容
+        <select class="selectbox" id="exportType" style="display:block;width:100%;margin-top:6px;">
+          <option value="">商品汇总</option>
+          <option value="24h">近24小时销量明细</option>
+          <option value="7d">近7天销量明细</option>
+          <option value="30d">近30天销量明细</option>
+        </select>
+      </label>
       <div class="export-actions">
         <button class="export-format" id="exportXlsx" type="button"><strong>Excel（.xlsx）</strong><small>适合继续筛选、排序和编辑</small></button>
         <button class="export-format" id="exportCsv" type="button"><strong>CSV（.csv）</strong><small>UTF-8 BOM，兼容中文 Excel</small></button>
