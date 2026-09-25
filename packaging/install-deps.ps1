@@ -2,11 +2,13 @@
     [switch]$CheckOnly,
     [ValidateSet('All', 'WebView2', 'Python', 'Chrome', 'MuMu', 'PythonPackages')]
     [string]$Step = 'All',
-    [string]$InstallerPath
+    [string]$InstallerPath,
+    [string]$RequirementsPath
 )
 
 $ErrorActionPreference = 'Stop'
 $appDir = Split-Path -Parent $PSScriptRoot
+if (-not $RequirementsPath) { $RequirementsPath = Join-Path $appDir 'backend\requirements.txt' }
 $userRoot = Join-Path $env:LOCALAPPDATA 'XhsXuanpin'
 $pythonEnv = Join-Path $userRoot 'python-env'
 $downloadDir = Join-Path $env:TEMP 'XhsXuanpin-Setup'
@@ -120,7 +122,7 @@ function Install-MuMu($file) {
 
 try {
     if (-not [Environment]::Is64BitOperatingSystem) { throw '只支持 Windows x64' }
-    if (-not (Test-Path -LiteralPath (Join-Path $appDir 'backend\requirements.txt'))) { throw '缺少后端依赖清单' }
+    if (-not (Test-Path -LiteralPath $RequirementsPath)) { throw '缺少后端依赖清单' }
 
     if (($Step -eq 'All' -or $Step -eq 'WebView2') -and -not (Test-WebView2)) {
         if ($CheckOnly) { throw '缺少 WebView2 Runtime' }
@@ -161,7 +163,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw '创建 Python 环境失败' }
         }
         if (-not $CheckOnly) {
-            & $envPython -m pip install --disable-pip-version-check -r (Join-Path $appDir 'backend\requirements.txt')
+            & $envPython -m pip install --disable-pip-version-check -r $RequirementsPath
             if ($LASTEXITCODE -ne 0) { throw '安装 Python 依赖失败' }
         }
         & $envPython -c 'import flask, apscheduler, playwright, openpyxl'

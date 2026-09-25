@@ -26,6 +26,8 @@ UninstallDisplayIcon={app}\XhsXuanpin.App.exe
 CloseApplications=yes
 
 [Files]
+Source: "{#StageDir}\setup\install-deps.ps1"; Flags: dontcopy
+Source: "{#StageDir}\backend\requirements.txt"; Flags: dontcopy
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
@@ -79,7 +81,8 @@ var
   Params: String;
 begin
   Params := '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' +
-    ExpandConstant('{app}\setup\install-deps.ps1') + '" -Step ' + Step;
+    ExpandConstant('{tmp}\install-deps.ps1') + '" -Step ' + Step +
+    ' -RequirementsPath "' + ExpandConstant('{tmp}\requirements.txt') + '"';
   if CheckOnly then Params := Params + ' -CheckOnly';
   if InstallerPath <> '' then Params := Params + ' -InstallerPath "' + InstallerPath + '"';
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
@@ -135,20 +138,48 @@ begin
   WizardForm.Repaint;
 end;
 
+procedure InstallDependencyWithRetry(Index: Integer; const Step, Title, Url, FileName: String);
+var
+  ErrorText: String;
+begin
+  while True do
+  begin
+    try
+      InstallDependency(Index, Step, Title, Url, FileName);
+      exit;
+    except
+      ErrorText := GetExceptionMessage;
+      Log(Title + '：' + ErrorText);
+      if WizardSilent or (MsgBox(ErrorText + #13#10#13#10 +
+        '重试当前步骤？已完成的依赖不会重新安装。', mbError, MB_RETRYCANCEL) <> IDRETRY) then
+        RaiseException(ErrorText);
+    end;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then
-  begin
+  if CurStep <> ssInstall then exit;
+  try
+    ExtractTemporaryFile('install-deps.ps1');
+    ExtractTemporaryFile('requirements.txt');
     WizardForm.ProgressGauge.Max := 100;
     WizardForm.ProgressGauge.Position := 0;
-    InstallDependency(1, 'WebView2', 'WebView2 运行环境',
+    InstallDependencyWithRetry(1, 'WebView2', 'WebView2 运行环境',
       'https://go.microsoft.com/fwlink/p/?LinkId=2124703', 'WebView2Setup.exe');
-    InstallDependency(2, 'Python', 'Python 3.12',
+    InstallDependencyWithRetry(2, 'Python', 'Python 3.12',
       'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe', 'Python-3.12.10-amd64.exe');
-    InstallDependency(3, 'Chrome', 'Google Chrome',
+    InstallDependencyWithRetry(3, 'Chrome', 'Google Chrome',
       'https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi', 'GoogleChromeEnterprise64.msi');
-    InstallDependency(4, 'MuMu', 'MuMu 模拟器',
+    InstallDependencyWithRetry(4, 'MuMu', 'MuMu 模拟器',
       'https://mumu.nie.netease.com/api/dl/win?channel=gw-win', 'MuMuSetup.exe');
-    InstallDependency(5, 'PythonPackages', '工作台 Python 依赖', '', '');
+    InstallDependencyWithRetry(5, 'PythonPackages', '工作台 Python 依赖', '', '');
+  except
+    Log('依赖安装未完成：' + GetExceptionMessage);
+    if not WizardSilent then
+      MsgBox('依赖安装未完成：' + GetExceptionMessage + #13#10 +
+        '工作台尚未安装。检查问题后可重新运行安装器，已完成的依赖会自动复用。',
+        mbError, MB_OK);
+    Abort;
   end;
 end;
