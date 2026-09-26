@@ -1,9 +1,12 @@
 ﻿param(
     [switch]$CheckOnly,
-    [ValidateSet('All', 'WebView2', 'Python', 'Chrome', 'MuMu', 'PythonPackages')]
+    [ValidateSet('All', 'WebView2', 'Python', 'Chrome', 'MuMu', 'MuMuStartup', 'PythonPackages')]
     [string]$Step = 'All',
     [string]$InstallerPath,
-    [string]$RequirementsPath
+    [string]$RequirementsPath,
+    [switch]$MachineOnly,
+    [string]$MuMuDirectory,
+    [string]$StartupReportPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -120,8 +123,124 @@ function Install-MuMu($file) {
     throw '30 分钟内未检测到可用的 MuMu，请查看安装状态后重新运行安装器'
 }
 
+function Test-MuMuPath($value, $directory) {
+    if (-not $value -or -not $directory) { return $false }
+    return $value.ToString().IndexOf($directory.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
+function Remove-MuMuRunEntries($root, $directory) {
+    if (-not (Test-Path -LiteralPath $root)) { return }
+    $item = Get-ItemProperty -LiteralPath $root
+    foreach ($entry in $item.PSObject.Properties) {
+        if ($entry.Name -notlike 'MuMu*' -or -not (Test-MuMuPath $entry.Value $directory)) { continue }
+        Remove-ItemProperty -LiteralPath $root -Name $entry.Name
+        Write-Host "已禁用 MuMu 登录启动项：$root\$($entry.Name)"
+    }
+}
+
+function Remove-MuMuStartupShortcuts($folder, $directory) {
+    if (-not (Test-Path -LiteralPath $folder)) { return }
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($shortcut in (Get-ChildItem -LiteralPath $folder -Filter '*.lnk' -File)) {
+        $target = $shell.CreateShortcut($shortcut.FullName).TargetPath
+        if (-not (Test-MuMuPath $target $directory)) { continue }
+        Remove-Item -LiteralPath $shortcut.FullName
+        Write-Host "已禁用 MuMu 登录快捷方式：$($shortcut.FullName)"
+    }
+}
+
+function Get-MuMuServices($directory) {
+    @(Get-CimInstance Win32_Service | Where-Object {
+        $_.Name -like 'MuMu*' -and (Test-MuMuPath $_.PathName $directory)
+    })
+}
+
+function Get-MuMuStartupTasks($directory) {
+    @(Get-ScheduledTask | Where-Object {
+        $_.State -ne 'Disabled' -and
+        @($_.Triggers | Where-Object { $_.CimClass.CimClassName -in @('MSFT_TaskBootTrigger', 'MSFT_TaskLogonTrigger') }).Count -gt 0 -and
+        @($_.Actions | Where-Object { Test-MuMuPath $_.Execute $directory }).Count -gt 0
+    })
+}
+
+function Get-MuMuStartupEntries($directory, [switch]$MachineOnly) {
+    $roots = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+               'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run')
+    if (-not $MachineOnly) { $roots += 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' }
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $item = Get-ItemProperty -LiteralPath $root
+        foreach ($entry in $item.PSObject.Properties) {
+            if ($entry.Name -like 'MuMu*' -and (Test-MuMuPath $entry.Value $directory)) {
+                "$root\$($entry.Name)"
+            }
+        }
+    }
+    foreach ($service in (Get-MuMuServices $directory | Where-Object { $_.StartMode -eq 'Auto' })) {
+        "Service: $($service.Name)"
+    }
+    foreach ($task in (Get-MuMuStartupTasks $directory)) {
+        "Task: $($task.TaskPath)$($task.TaskName)"
+    }
+    $folders = @([Environment]::GetFolderPath('CommonStartup'))
+    if (-not $MachineOnly) { $folders += [Environment]::GetFolderPath('Startup') }
+    foreach ($folder in $folders) {
+        if (-not (Test-Path -LiteralPath $folder)) { continue }
+        $shell = New-Object -ComObject WScript.Shell
+        foreach ($shortcut in (Get-ChildItem -LiteralPath $folder -Filter '*.lnk' -File)) {
+            if (Test-MuMuPath $shell.CreateShortcut($shortcut.FullName).TargetPath $directory) {
+                "Shortcut: $($shortcut.FullName)"
+            }
+        }
+    }
+}
+
+function Test-MuMuMachineStartup($directory) {
+    return @(Get-MuMuStartupEntries $directory -MachineOnly).Count -gt 0
+}
+
+function Disable-MuMuMachineStartup($directory) {
+    foreach ($root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+                        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run')) {
+        Remove-MuMuRunEntries $root $directory
+    }
+    Remove-MuMuStartupShortcuts ([Environment]::GetFolderPath('CommonStartup')) $directory
+    foreach ($task in (Get-MuMuStartupTasks $directory)) {
+        Disable-ScheduledTask -InputObject $task | Out-Null
+        Write-Host "已禁用 MuMu 启动任务：$($task.TaskPath)$($task.TaskName)"
+    }
+    foreach ($service in (Get-MuMuServices $directory | Where-Object { $_.StartMode -eq 'Auto' })) {
+        Set-Service -Name $service.Name -StartupType Manual
+        Write-Host "MuMu 服务已改为手动启动：$($service.Name)"
+    }
+    if (Test-MuMuMachineStartup $directory) { throw '仍有 MuMu 系统级开机启动项未禁用' }
+}
+
+function Disable-MuMuStartup($directory) {
+    Remove-MuMuRunEntries 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' $directory
+    Remove-MuMuStartupShortcuts ([Environment]::GetFolderPath('Startup')) $directory
+    if (-not (Test-MuMuMachineStartup $directory)) { return }
+    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Disable-MuMuMachineStartup $directory
+    } else {
+        $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $PSCommandPath +
+            '" -Step MuMuStartup -MachineOnly -MuMuDirectory "' + $directory + '"'
+        $process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru
+        if ($process.ExitCode -ne 0) { throw "MuMu 系统级开机启动项配置失败，退出码 $($process.ExitCode)" }
+    }
+    if (Test-MuMuMachineStartup $directory) { throw '仍有 MuMu 系统级开机启动项未禁用' }
+}
+
 try {
     if (-not [Environment]::Is64BitOperatingSystem) { throw '只支持 Windows x64' }
+    if ($MachineOnly) {
+        if ($Step -ne 'MuMuStartup' -or -not (Test-Path -LiteralPath (Join-Path $MuMuDirectory 'nx_main\MuMuManager.exe'))) {
+            throw 'MuMu 系统级启动项配置参数无效'
+        }
+        Disable-MuMuMachineStartup $MuMuDirectory
+        return
+    }
     if (-not (Test-Path -LiteralPath $RequirementsPath)) { throw '缺少后端依赖清单' }
 
     if (($Step -eq 'All' -or $Step -eq 'WebView2') -and -not (Test-WebView2)) {
@@ -152,6 +271,12 @@ try {
         Write-Host "MuMu 已就绪：$directory"
     }
 
+    if ($Step -eq 'MuMuStartup') {
+        $directory = Get-MuMuDirectory
+        if (-not $directory) { throw '未检测到 MuMu 安装目录' }
+        Disable-MuMuStartup $directory
+    }
+
     if ($Step -eq 'All' -or $Step -eq 'PythonPackages') {
         $envPython = Join-Path $pythonEnv 'Scripts\python.exe'
         if (-not (Test-Path -LiteralPath $envPython)) {
@@ -174,5 +299,15 @@ try {
     Write-Host "依赖安装失败：$_"
     exit 1
 } finally {
+    if ($Step -eq 'MuMuStartup' -and $StartupReportPath -and -not $MachineOnly) {
+        try {
+            $directory = Get-MuMuDirectory
+            $remaining = if ($directory) { @(Get-MuMuStartupEntries $directory) } else { @('MuMu installation not found') }
+            if ($remaining.Count -eq 0) { $remaining = @('None') }
+            Set-Content -LiteralPath $StartupReportPath -Value $remaining -Encoding UTF8
+        } catch {
+            Set-Content -LiteralPath $StartupReportPath -Value 'Startup status unavailable; see setup.log' -Encoding UTF8
+        }
+    }
     Stop-Transcript | Out-Null
 }

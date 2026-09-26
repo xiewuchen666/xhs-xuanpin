@@ -36,7 +36,6 @@ internal sealed class RuntimeCoordinator : IDisposable
     private volatile bool _stopping;
     private volatile bool _manualMuMuControl;
     private volatile bool _launchingMuMu;
-    private bool _launchedMuMu;
     public bool IsManualMuMuControl => _manualMuMuControl;
 
     public async Task StartBackendAsync()
@@ -64,7 +63,7 @@ internal sealed class RuntimeCoordinator : IDisposable
         {
             if (_stopping) throw new OperationCanceledException("工作台正在退出");
             if (_manualMuMuControl) throw new OperationCanceledException("模拟器已切换为人工操作");
-            var launchedMuMu = await EnsureAndroidAsync();
+            await EnsureAndroidAsync();
             _androidUi = new AndroidUi(Adb, Serial);
             if (await IsXhsInstalledAsync()) await LaunchXhsAppAsync();
             else
@@ -74,7 +73,7 @@ internal sealed class RuntimeCoordinator : IDisposable
             }
             if (_stopping) throw new OperationCanceledException("工作台正在退出");
             _androidStarted = true;
-            if (launchedMuMu) await SetMuMuWindowsVisibleAsync(false);
+            await SetMuMuWindowsVisibleAsync(false, includeExisting: true);
             AppLogger.Info("Runtime", "Android initialization completed");
         }
         catch
@@ -242,14 +241,12 @@ internal sealed class RuntimeCoordinator : IDisposable
         throw new InvalidOperationException("Python 本地服务未能启动");
     }
 
-    private async Task<bool> EnsureAndroidAsync()
+    private async Task EnsureAndroidAsync()
     {
         if (!File.Exists(Adb)) throw new InvalidOperationException("未找到 MuMu ADB");
-        var launchedMuMu = false;
         if (!await AdbReadyAsync())
         {
             AppLogger.Warning("Runtime", "Android ADB is not ready; launching MuMu player");
-            launchedMuMu = true;
             await LaunchMuMuAsync();
         }
         try
@@ -261,19 +258,16 @@ internal sealed class RuntimeCoordinator : IDisposable
             if (_manualMuMuControl) throw new OperationCanceledException("模拟器已切换为人工操作");
             AppLogger.Warning("Runtime", "Android ADB reports online but shell is unresponsive; restarting MuMu player");
             await ShutdownMuMuPlayerAsync();
-            launchedMuMu = true;
             await LaunchMuMuAsync();
             await RunAsync(Adb, "-s", Serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP");
         }
         await EnsureReadableDensityAsync();
         if (_manualMuMuControl) throw new OperationCanceledException("模拟器已切换为人工操作");
-        return launchedMuMu;
     }
 
     private async Task LaunchMuMuAsync()
     {
         var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
-        _launchedMuMu = true;
         _launchingMuMu = true;
         try
         {
@@ -471,6 +465,10 @@ internal sealed class RuntimeCoordinator : IDisposable
                     AppLogger.Warning("Runtime", $"Android screen sleep failed: {ex.Message}");
                 }
             }
+            await SetMuMuWindowsVisibleAsync(false, includeExisting: true);
+            // scrcpy exit can reveal the device window just after the first hide.
+            await Task.Delay(250);
+            await SetMuMuWindowsVisibleAsync(false, includeExisting: true);
             AppLogger.Info("Runtime", "Phone stream suspended; MuMu and ADB remain available");
             _scrcpyLifecycleLock.Release();
         }
@@ -483,9 +481,9 @@ internal sealed class RuntimeCoordinator : IDisposable
         {
             if (_stopping) throw new OperationCanceledException("工作台正在退出");
             if (_manualMuMuControl) throw new OperationCanceledException("模拟器正在由用户操作");
-            var launchedMuMu = await EnsureAndroidAsync();
+            await EnsureAndroidAsync();
             await LaunchXhsAppAsync();
-            if (launchedMuMu) await SetMuMuWindowsVisibleAsync(false);
+            await SetMuMuWindowsVisibleAsync(false, includeExisting: true);
         }
         catch
         {
@@ -528,7 +526,6 @@ internal sealed class RuntimeCoordinator : IDisposable
         try { await StopXhsAsync(); }
         catch (Exception ex) { AppLogger.Warning("Runtime", $"Xiaohongshu stop before MuMu shutdown failed: {ex.Message}"); }
         await StopMuMuAsync();
-        await StopMuMuProcessesAsync(includeExisting: true);
     }
 
     public async Task StopMuMuAsync()
@@ -538,7 +535,9 @@ internal sealed class RuntimeCoordinator : IDisposable
         {
             _scrcpySuspended = true;
             ResetScrcpyState(terminateRunningProcess: true);
-            await ShutdownMuMuPlayerAsync();
+            try { await ShutdownMuMuPlayersAsync(); }
+            catch (Exception ex) { AppLogger.Warning("Runtime", $"MuMu graceful shutdown failed; cleaning processes: {ex.Message}"); }
+            await StopMuMuProcessesAsync();
         }
         finally
         {
@@ -552,7 +551,6 @@ internal sealed class RuntimeCoordinator : IDisposable
     {
         _stopping = true;
         await StopMuMuAsync();
-        await StopMuMuProcessesAsync(includeExisting: false);
     }
 
     private async Task EnsureReadableDensityAsync()
@@ -874,7 +872,6 @@ internal sealed class RuntimeCoordinator : IDisposable
                           device.GetProperty("is_process_started").GetBoolean();
             if (!running)
             {
-                _launchedMuMu = true;
                 Process.Start(new ProcessStartInfo(manager, "api launch_player 0") { UseShellExecute = false, CreateNoWindow = true });
             }
         }
@@ -984,29 +981,133 @@ internal sealed class RuntimeCoordinator : IDisposable
         catch (Exception ex) { AppLogger.Warning("Runtime", $"MuMu ADB disconnect failed: {ex.Message}"); }
     }
 
-    private async Task StopMuMuProcessesAsync(bool includeExisting)
+    private async Task ShutdownMuMuPlayersAsync()
     {
-        if (!includeExisting && !_launchedMuMu) return;
         var manager = Path.Combine(_mumuDirectory, "nx_main", "MuMuManager.exe");
-        using var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all"));
-        if (info.RootElement.EnumerateObject().Any(player =>
-                player.Value.TryGetProperty("is_process_started", out var started) && started.GetBoolean())) return;
+        using (var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all")))
+        {
+            foreach (var player in info.RootElement.EnumerateObject())
+                if (int.TryParse(player.Name, out var index) && player.Value.ValueKind == JsonValueKind.Object &&
+                    player.Value.TryGetProperty("is_process_started", out var started) && started.GetBoolean())
+                    await RunAsync(manager, "api", "shutdown_player", index.ToString());
+        }
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            using var info = JsonDocument.Parse(await RunAsync(manager, "info", "-v", "all"));
+            if (!info.RootElement.EnumerateObject().Any(player =>
+                player.Value.ValueKind == JsonValueKind.Object &&
+                player.Value.TryGetProperty("is_process_started", out var started) && started.GetBoolean()))
+            {
+                await DisconnectMuMuAdbAsync();
+                return;
+            }
+            await Task.Delay(500);
+        }
+        throw new InvalidOperationException("MuMu 实例未能在 30 秒内关闭");
+    }
 
-        foreach (var processName in includeExisting ? new[] { "MuMuNxMain", "MuMuNxService" } : new[] { "MuMuNxMain" })
+    private async Task StopMuMuProcessesAsync()
+    {
+        // Validate the installed service path before stopping it through the Service Control Manager.
+        using var serviceKey = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\MuMuRemoteService");
+        var serviceImage = serviceKey?.GetValue("ImagePath")?.ToString() ?? "";
+        var expectedService = Path.Combine(_mumuDirectory, "nx_main", "MuMuRemoteService.exe");
+        var serviceCommand = serviceImage.TrimStart('"');
+        foreach (var process in Process.GetProcessesByName("MuMuRemoteService"))
+        {
+            using (process)
+            {
+                if (!serviceCommand.StartsWith(expectedService, StringComparison.OrdinalIgnoreCase) ||
+                    (serviceCommand.Length > expectedService.Length &&
+                     serviceCommand[expectedService.Length] != '"' && !char.IsWhiteSpace(serviceCommand[expectedService.Length])))
+                    throw new InvalidOperationException("MuMu 远程服务安装路径无法确认，已停止清理以避免误关其他进程");
+                await StopMuMuServiceAsync();
+            }
+        }
+
+        var root = Path.GetFullPath(_mumuDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var processNames = new[] { "MuMuManager", "MuMuNxService", "MuMuNxDevice", "MuMuNxMain" };
+        foreach (var processName in processNames)
         foreach (var process in Process.GetProcessesByName(processName))
         {
             using (process)
             {
-                if ((!includeExisting && _mumuMainPidsAtStartup.Contains(process.Id)) || process.HasExited) continue;
-                if (!string.Equals(process.MainModule?.FileName,
-                        Path.Combine(_mumuDirectory, "nx_main", processName + ".exe"),
-                        StringComparison.OrdinalIgnoreCase)) continue;
-                process.Kill();
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await process.WaitForExitAsync(timeout.Token);
+                if (!MuMuProcessExists(processName, process.Id)) continue;
+                if (process.MainModule?.FileName is not { } path ||
+                    !Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+                await StopMuMuProcessAsync(processName, process.Id);
                 AppLogger.Info("Runtime", $"MuMu process stopped; name={processName}, pid={process.Id}");
             }
         }
+        foreach (var processName in new[] { "MuMuRemoteService", "MuMuRemoteBackend", "MuMuRemoteHealthd" })
+            if (MuMuProcessExists(processName))
+                throw new InvalidOperationException($"MuMu 服务进程仍在运行：{processName}");
+        foreach (var processName in processNames)
+        foreach (var process in Process.GetProcessesByName(processName))
+        {
+            using (process)
+                if (MuMuProcessExists(processName, process.Id) && process.MainModule?.FileName is { } path &&
+                    Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"MuMu 进程仍在运行：{processName}");
+        }
+    }
+
+    private static bool MuMuProcessExists(string name, int? pid = null)
+    {
+        var processes = Process.GetProcessesByName(name);
+        try { return processes.Any(process => pid is null || process.Id == pid); }
+        finally { foreach (var process in processes) process.Dispose(); }
+    }
+
+    private static async Task StopMuMuServiceAsync()
+    {
+        try { await RunAsync("sc.exe", "stop", "MuMuRemoteService"); }
+        catch (Exception ex)
+        {
+            if (MuMuProcessExists("MuMuRemoteService"))
+            {
+                AppLogger.Warning("Runtime", $"MuMu service needs elevation to stop: {ex.Message}");
+                using var elevated = Process.Start(new ProcessStartInfo("sc.exe", "stop MuMuRemoteService")
+                {
+                    UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden
+                }) ?? throw new InvalidOperationException("无法启动 MuMu 服务停止操作");
+                await elevated.WaitForExitAsync();
+                if (elevated.ExitCode != 0 && MuMuProcessExists("MuMuRemoteService"))
+                    throw new InvalidOperationException($"MuMu 服务停止失败，退出码 {elevated.ExitCode}");
+            }
+        }
+        for (var i = 0; i < 60; i++)
+        {
+            if (!MuMuProcessExists("MuMuRemoteService") &&
+                !MuMuProcessExists("MuMuRemoteBackend") &&
+                !MuMuProcessExists("MuMuRemoteHealthd")) return;
+            await Task.Delay(500);
+        }
+        throw new InvalidOperationException("MuMu 远程服务或子进程仍在运行");
+    }
+
+    private static async Task StopMuMuProcessAsync(string name, int pid)
+    {
+        try { await RunAsync("taskkill.exe", "/F", "/T", "/PID", pid.ToString()); }
+        catch (Exception ex)
+        {
+            if (!MuMuProcessExists(name, pid)) return;
+            AppLogger.Warning("Runtime", $"MuMu process needs elevation to stop; name={name}, pid={pid}: {ex.Message}");
+            using var elevated = Process.Start(new ProcessStartInfo("taskkill.exe", $"/F /T /PID {pid}")
+            {
+                UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden
+            }) ?? throw new InvalidOperationException($"无法启动 MuMu 进程清理：{name}");
+            await elevated.WaitForExitAsync();
+            if (elevated.ExitCode != 0 && MuMuProcessExists(name, pid))
+                throw new InvalidOperationException($"MuMu 进程清理失败：{name}，退出码 {elevated.ExitCode}");
+        }
+        for (var i = 0; i < 10; i++)
+        {
+            if (!MuMuProcessExists(name, pid)) return;
+            await Task.Delay(500);
+        }
+        throw new InvalidOperationException($"MuMu 进程仍在运行：{name}，PID {pid}");
     }
 
     private static string FindProjectRoot()

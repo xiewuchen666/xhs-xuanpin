@@ -85,6 +85,8 @@ begin
     ' -RequirementsPath "' + ExpandConstant('{tmp}\requirements.txt') + '"';
   if CheckOnly then Params := Params + ' -CheckOnly';
   if InstallerPath <> '' then Params := Params + ' -InstallerPath "' + InstallerPath + '"';
+  if Step = 'MuMuStartup' then Params := Params + ' -StartupReportPath "' +
+    ExpandConstant('{tmp}\mumu-startup-status.txt') + '"';
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 end;
@@ -157,8 +159,53 @@ begin
   end;
 end;
 
+procedure ConfigureMuMuStartup;
+var
+  ReportPath: String;
+  Remaining: String;
+  Entries: TArrayOfString;
+  I: Integer;
+begin
+  ReportPath := ExpandConstant('{tmp}\mumu-startup-status.txt');
+  if not WizardSilent then
+    MsgBox('工作台文件已安装。接下来将尝试关闭 MuMu 的开机自启项。' + #13#10 +
+      '若 Windows 请求管理员权限，请确认这是为了把 MuMu 服务改为手动启动。', mbInformation, MB_OK);
+  while True do
+  begin
+    DeleteFile(ReportPath);
+    if RunDependency('MuMuStartup', False, '') then
+    begin
+      DependencyLabels[4].Caption := '✓ MuMu 已安装；开机自启已关闭';
+      Log('MuMu 开机自启配置完成');
+      exit;
+    end;
+    Remaining := '';
+    if LoadStringsFromFile(ReportPath, Entries) then
+    begin
+      for I := 0 to GetArrayLength(Entries) - 1 do
+        Remaining := Remaining + Entries[I] + #13#10;
+      Remaining := Trim(Remaining);
+    end
+    else
+      Remaining := '状态无法读取，请查看 setup.log';
+    if Trim(Remaining) = 'None' then
+      Remaining := '未发现剩余自启项，但配置校验失败；请查看 setup.log';
+    Log('MuMu 开机自启配置未完成：' + Remaining);
+    DependencyLabels[4].Caption := '⚠ MuMu 已安装；部分开机自启未关闭';
+    if WizardSilent then exit;
+    if MsgBox('工作台已经安装完成，以下 MuMu 自启项仍需处理：' + #13#10 + Remaining + #13#10 + #13#10 +
+      '重试请点“重试”；点“取消”将跳过配置并完成安装。',
+      mbError, MB_RETRYCANCEL) <> IDRETRY then exit;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssPostInstall then
+  begin
+    ConfigureMuMuStartup;
+    exit;
+  end;
   if CurStep <> ssInstall then exit;
   try
     ExtractTemporaryFile('install-deps.ps1');
