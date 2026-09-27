@@ -19,6 +19,8 @@ Get-ChildItem -LiteralPath (Join-Path $source 'web') -File | Copy-Item -Destinat
 Get-ChildItem -LiteralPath $scrcpy -File | Copy-Item -Destination (Join-Path $stage 'scrcpy')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-deps.ps1') -Destination (Join-Path $stage 'setup')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'migrate-data.ps1') -Destination (Join-Path $stage 'setup')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'watchdog.ps1') -Destination (Join-Path $stage 'setup')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'launch-watchdog.vbs') -Destination (Join-Path $stage 'setup')
 New-Item -ItemType File -Path (Join-Path $stage 'installed.marker') | Out-Null
 
 & $compiler "/DStageDir=$stage" "/DSourceDir=$source" "/DArtifactDir=$artifactRoot" (Join-Path $PSScriptRoot 'installer.iss')

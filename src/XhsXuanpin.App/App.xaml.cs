@@ -13,6 +13,7 @@ public partial class App : System.Windows.Application
     private Thread? _activationThread;
     private bool _ownsSingleInstanceMutex;
     private volatile bool _isExiting;
+    private bool _intentionalExit;
 
     internal bool IsExiting => _isExiting;
 
@@ -107,12 +108,14 @@ public partial class App : System.Windows.Application
             AppLogger.Error("App", "Workbench exit cleanup failed", ex);
             System.Windows.MessageBox.Show($"退出时未能完全关闭模拟器：{ex.Message}", "小红书选品工作台", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+        _intentionalExit = true;
         Shutdown();
     }
 
     protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
         _isExiting = true;
+        _intentionalExit = true;
         base.OnSessionEnding(e);
     }
 
@@ -125,6 +128,7 @@ public partial class App : System.Windows.Application
         AppLogger.Info("App", $"Workbench exiting; code={e.ApplicationExitCode}");
         if (_ownsSingleInstanceMutex && _singleInstanceMutex is not null)
         {
+            if (_intentionalExit) AppLogger.MarkWatchdogExit();
             AppLogger.MarkSessionEnded();
             _singleInstanceMutex.ReleaseMutex();
         }

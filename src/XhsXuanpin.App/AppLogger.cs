@@ -51,6 +51,23 @@ internal static class AppLogger
         }
     }
 
+    public static void MarkWatchdogExit()
+    {
+        var token = Environment.GetEnvironmentVariable("XHS_XUANPIN_WATCHDOG_TOKEN");
+        if (!Guid.TryParseExact(token, "N", out var runId)) return;
+        try
+        {
+            Directory.CreateDirectory(LogDirectory);
+            File.WriteAllText(
+                Path.Combine(LogDirectory, $"watchdog-exit-{runId:N}"),
+                Environment.ProcessId.ToString());
+        }
+        catch
+        {
+            // An exit marker must not interrupt the user's explicit exit.
+        }
+    }
+
     private static void Write(string level, string source, string message, Exception? exception)
     {
         try

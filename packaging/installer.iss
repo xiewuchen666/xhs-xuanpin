@@ -23,7 +23,8 @@ Compression=lzma2
 SolidCompression=yes
 SetupIconFile={#SourceDir}\src\XhsXuanpin.App\Assets\logo.ico
 UninstallDisplayIcon={app}\XhsXuanpin.App.exe
-CloseApplications=yes
+AppMutex=Local\XhsXuanpin.App,Local\XhsXuanpin.Watchdog
+CloseApplications=no
 
 [Files]
 Source: "{#StageDir}\setup\install-deps.ps1"; Flags: dontcopy
@@ -31,8 +32,8 @@ Source: "{#StageDir}\backend\requirements.txt"; Flags: dontcopy
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\小红书选品工作台"; Filename: "{app}\XhsXuanpin.App.exe"
-Name: "{autodesktop}\小红书选品工作台"; Filename: "{app}\XhsXuanpin.App.exe"; Tasks: desktopicon
+Name: "{group}\小红书选品工作台"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\setup\launch-watchdog.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\XhsXuanpin.App.exe"
+Name: "{autodesktop}\小红书选品工作台"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\setup\launch-watchdog.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\XhsXuanpin.App.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: desktopicon; Description: "创建桌面快捷方式"; Flags: unchecked
