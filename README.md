@@ -47,3 +47,7 @@ node --check web\app.js
 安装版的用户数据、浏览器资料和日志位于 `%LOCALAPPDATA%\XhsXuanpin\data`。工作台依赖本机持续运行，并受小红书页面变化、登录状态和平台安全验证影响；不会绕过这些验证。已知验收边界记录在 [CURRENT_TASK.md](CURRENT_TASK.md)。
 
 这是非官方项目，与小红书平台没有隶属关系。
+
+## 开源许可
+
+本项目原创代码和文档采用 [MIT 许可证](LICENSE)，版权署名为 Copyright (c) 2026 xiewuchen666。小红书名称与标识等第三方内容不在本项目的 MIT 授权范围内；所使用的第三方软件仍遵循各自的许可条款。
