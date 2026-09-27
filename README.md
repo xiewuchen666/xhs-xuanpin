@@ -24,9 +24,9 @@ Windows x64 安装包使用自包含 .NET 8 发布，目标电脑无需预装 .N
 | `backend/` | Python Flask 本地 API、Playwright 采集、SQLite、指标计算、任务调度和导出 |
 | `web/` | WebView2 内的监控与选品界面 |
 | `packaging/` | Inno Setup 安装器、依赖安装和工作台守护脚本 |
-| `design/` | 已确认的设计约定、原型和静态验收图 |
+| `prd.md`、`TECHNICAL.md`、`CURRENT_TASK.md` | 产品范围、技术实现和发布验收记录 |
 
-产品范围见 [prd.md](prd.md)，技术方案见 [TECHNICAL.md](TECHNICAL.md)，当前发布状态与已知边界见 [CURRENT_TASK.md](CURRENT_TASK.md)。
+产品范围见 [prd.md](prd.md)，技术方案见 [TECHNICAL.md](TECHNICAL.md)，当前发布状态与已知边界见 [CURRENT_TASK.md](CURRENT_TASK.md)。界面以仓库中的 WPF XAML 和 `web/` 实现为准；早期未采用的设计原型已移除。
 
 ## 从源码构建与检查
 

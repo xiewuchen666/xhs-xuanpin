@@ -9,11 +9,10 @@
 按顺序读取：
 
 1. `prd.md` — 产品范围与验收标准。
-2. `design/visual-contract.md` — 已确认视觉与交互硬约束。
-3. `TECHNICAL.md` — 已确认技术方案。
-4. `CURRENT_TASK.md` — 当前唯一开发任务。
+2. `TECHNICAL.md` — 发布版技术方案。
+3. `CURRENT_TASK.md` — 发布验收、已知边界与当前任务状态。
 
-`DESIGN.md` 是基础视觉语言；与项目级约定冲突时，以 `design/visual-contract.md` 为准。
+发布版实际界面见 `src/XhsXuanpin.App/MainWindow.xaml` 和 `web/index.html`、`web/app.js`。早期未采用的设计原型已从当前仓库版本移除。
 
 ## 硬规则
 
